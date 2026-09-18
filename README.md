@@ -9,7 +9,7 @@ Beta and demo versions are not released to the public.
 | | Version |
 | --- | --- |
 | Latest public release | None |
-| Current development version | [v0.1.0-beta.1(CHANGELOG.md)|
+| Current development version | [v0.1.0-beta.1[(CHANGELOG.md)]|
 | Development version last updated | 2026/09/18 |
 
 ## 🔧 Modifications
