@@ -480,18 +480,29 @@ struct AppleMusicLyricsPage: View {
     /// 收起壳只会剩一片空白。
     private func hideShellWhileScrolling() {
         guard hidesShellOnScroll else { return }
-        shellRestoreTask?.cancel()
-        shellRestoreTask = nil
-        guard !isShellHidden else { return }
-        withAnimation(.easeOut(duration: 0.18)) {
-            isShellHidden = true
+        if !isShellHidden {
+            withAnimation(.easeOut(duration: 0.18)) {
+                isShellHidden = true
+            }
         }
+        // ⚠️ 每次拖动都要**续上**恢复计时，而不是只在 `.onEnded` 里安排。
+        //
+        // `ScrollView` 一旦接管这次手势，SwiftUI 的 `onEnded` 有可能**根本不来**
+        // （拖动手势被滚动视图自己的 pan 识别器吃掉）。那时壳就永远停在"已收起"：
+        // 标题栏、三键、右上角收起键全部消失 —— 用户在全屏里一个按键都没有，
+        // 而我们那块实心背景又把 Spotify 原生的按键压在下面，等于被困在全屏里。
+        // 现在"最后一次拖动之后 `shellRestoreDelay` 秒"必定恢复；
+        // `onEnded` 只是让恢复早一点发生。
+        scheduleShellRestore()
     }
 
     /// 松手：`shellRestoreDelay` 秒后把壳调回来。
     ///
     /// 用「延迟任务」而不是立即恢复，是因为 SwiftUI 拿不到惯性滚动的结束时机
     /// （见上面 DragGesture 那段说明）—— 这个固定窗口同时也盖住了减速阶段。
+    ///
+    /// ⚠️ 它同时也是**兜底**：拖动过程中的每一次 `onChanged` 都会调到这里来续期，
+    /// 所以即使 `onEnded` 没来（手势被 ScrollView 吃掉），壳也一定会回来。
     private func scheduleShellRestore() {
         guard hidesShellOnScroll else { return }
         shellRestoreTask?.cancel()
@@ -503,6 +514,16 @@ struct AppleMusicLyricsPage: View {
             withAnimation(.easeIn(duration: 0.22)) {
                 isShellHidden = false
             }
+        }
+    }
+
+    /// 壳收着就立刻调回来（点歌词时用）。
+    private func restoreShellIfHidden() {
+        guard isShellHidden else { return }
+        shellRestoreTask?.cancel()
+        shellRestoreTask = nil
+        withAnimation(.easeIn(duration: 0.22)) {
+            isShellHidden = false
         }
     }
 
@@ -595,6 +616,10 @@ struct AppleMusicLyricsPage: View {
         autoScrollPauseUntil = .distantPast
         lastDragTime = .distantPast
         lastAutoScrollTime = .distantPast
+
+        // 点歌词本身就是"我要看/我要用"的表达 —— 壳收着的话顺手调回来，
+        // 免得出现"点了半天也不见按键"的困惑。
+        restoreShellIfHidden()
 
         var transaction = Transaction()
         transaction.disablesAnimations = true

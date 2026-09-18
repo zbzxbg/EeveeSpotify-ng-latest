@@ -114,15 +114,7 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
             if let dto = resultDto {
                 writeDebugLog("[Lyrics] \(source.description) returned \(dto.lines.count) line(s)")
-                currentLyricsDto = dto.romanizedForWordByWordIfEnabled()
-                currentLyricsVersion += 1
-                // 数据到达即刷新逐词 overlay：9.1.x 上内嵌宿主是 NPV，
-                // 它只在进入正在播放页时出现一次，不会因为这首歌词到了再来一次。
-                // `WordByWordHost` 是 @MainActor 隔离的，必须经 `onMainThreadSync` 这个
-                // 本模块既有的桥进入（ng 的 hook 里也都是这么写的）。
-                onMainThreadSync {
-                    WordByWordHost.shared.refreshForCurrentLyrics()
-                }
+                storeLyricsDto(dto, source: source)
                 lyricsState.isEmpty = dto.lines.isEmpty
                 lyricsState.wasRomanized = dto.romanization == .romanized
                     || dto.romanization == .canBeRomanized
@@ -182,7 +174,11 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             writeDebugLog("[Lyrics] AMLL preferred — trying AMLL first, fallback target: \(source.description)")
 
             // 走同一套单源错误处理：记录 fallbackError、弹 MxM 相关弹窗。
-            let amllDto = try? requestSingleSource(
+            //
+            // ⚠️ 结果里带的是**实际**给词的那个源：AMLL 请求失败而 Genius 兜底成功时，
+            // 拿回来的 dto 是 Genius 的。以前这里只回传 dto、源名沿用调用方传的那个，
+            // 于是"来源标签写 AMLL、内容其实是 Genius"。
+            let amllResult = try? requestSingleSource(
                 .amllTtml,
                 searchQuery: searchQuery,
                 options: options,
@@ -201,13 +197,13 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             // 现在把判定口径与渲染层对齐（同一个 `hasUsableWordLevelData`）：
             // 行级数据在这里就被判为"不合格"，交给下面用户设置的源去处理。
             // 无时间轴的数据同样过不了这一关（`timeSynced == false`），一并回退。
-            if let dto = amllDto, hasUsableWordLevelData(dto) {
-                writeDebugLog("[Lyrics] AMLL succeeded — using it (\(dto.lines.count) line(s))")
-                return makeLyrics(from: dto, source: .amllTtml)
+            if let result = amllResult, hasUsableWordLevelData(result.dto) {
+                writeDebugLog("[Lyrics] AMLL succeeded — using it (\(result.dto.lines.count) line(s))")
+                return makeLyrics(from: result.dto, source: result.source)
             }
 
             // 分开报两种失败原因：日志里能立刻分清是"请求失败"还是"拿到了但不够逐词"。
-            if let dto = amllDto {
+            if let dto = amllResult?.dto {
                 let timeline = dto.timeSynced ? "line-or-word timeline" : "no timeline"
                 writeDebugLog(
                     "[Lyrics] AMLL returned \(dto.lines.count) line(s) but not word-by-word"
@@ -219,28 +215,39 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                 )
             }
             // 用户设置的就是 Genius 时不必再走下面的 geniusFallback，否则会重复请求一次。
-            let dto = try requestSingleSource(
+            let result = try requestSingleSource(
                 source,
                 searchQuery: searchQuery,
                 options: options,
                 recordFallbackError: false,
                 allowGeniusFallback: source != .genius
             )
-            return makeLyrics(from: dto, source: source)
+            return makeLyrics(from: result.dto, source: result.source)
         }
 
-        let lyricsDto = try requestSingleSource(
+        let result = try requestSingleSource(
             source,
             searchQuery: searchQuery,
             options: options,
             recordFallbackError: true
         )
 
-        return makeLyrics(from: lyricsDto, source: source)
+        return makeLyrics(from: result.dto, source: result.source)
     }
     }
 
     // MARK: - 单源请求
+
+    /// 一次单源请求的产物：歌词数据 + **实际**产出它的源。
+    ///
+    /// 为什么要显式带着"实际源"：这个方法在失败时会用 Genius 兜底重试，此时
+    /// 返回的是 Genius 的歌词，而调用方传进来的 `source` 是用户设的那个源。
+    /// 只回传 dto 的话，来源标签就会写成用户设的那个（真机上表现为
+    /// 「明明拿的是 Genius 的歌词，底部却写着 PetitLyrics」）。
+    private struct SourceLyricsResult {
+        let dto: LyricsDto
+        let source: LyricsSource
+    }
 
     /// 按用户设置请求单一来源。保持既有行为不变：
     /// - 该源的错误会写入 `lyricsState.fallbackError`（`recordFallbackError`）并弹 MxM 相关弹窗；
@@ -254,13 +261,16 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         options: LyricsOptions,
         recordFallbackError: Bool,
         allowGeniusFallback: Bool = true
-    ) throws -> LyricsDto {
+    ) throws -> SourceLyricsResult {
         let repository = source == .genius
             ? geniusLyricsRepository
             : lyricsRepository(for: source)
 
         do {
-            return try repository.getLyrics(searchQuery, options: options)
+            return SourceLyricsResult(
+                dto: try repository.getLyrics(searchQuery, options: options),
+                source: source
+            )
         } catch let error {
             // 单源模式以前只打一句「failed — falling back to Genius」，具体错误被丢掉，
             // 日志里看不出是网络失败、授权失败还是解析失败。
@@ -282,28 +292,77 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             }
 
             writeDebugLog("[Lyrics] \(source.description) failed — falling back to Genius")
-            // Genius 兜底源同样直接抛错，不再兜底为空歌词
-            return try geniusLyricsRepository.getLyrics(searchQuery, options: options)
+            // Genius 兜底源同样直接抛错，不再兜底为空歌词。
+            // ⚠️ 回传的 `source` 必须是 `.genius`：这份 dto 是 Genius 给的，
+            // 来源标签也得写 Genius（写用户设的那个源就是"注解显示 PetitLyrics"）。
+            return SourceLyricsResult(
+                dto: try geniusLyricsRepository.getLyrics(searchQuery, options: options),
+                source: .genius
+            )
         }
     }
 
     // MARK: - DTO → Lyrics
 
+    /// 把 dto 落到全局状态上（**唯一**写入口）。
+    ///
+    /// 两件事必须一起做，而且是同一个顺序：
+    ///   1. 提供者写进 dto 本身（`providerName`）并同步 `currentLyricsProvider`；
+    ///   2. `currentLyricsVersion` 自增并通知逐词 overlay 重挂。
+    ///
+    /// 以前第 1 步散在 `getLyricsDataForCurrentTrack` 的**末尾**（在 dto 写完之后），
+    /// 所以"旧 overlay 在 rebuild 时读到上一首的提供者"这种慢一拍是必然会发生的；
+    /// 现在提供者与 dto 是同一时刻写下的，不可能错配。
+    private func storeLyricsDto(_ dto: LyricsDto, source: LyricsSource) {
+        var dto = dto
+        dto.providerName = "\(source.description) (EeveeSpotify)"
+
+        let overlayDto = dto.romanizedForWordByWordIfEnabled()
+        currentLyricsDto = overlayDto
+        // ⚠️ 提供者要在**版本号自增之前**写好：观察者（两个 overlay 层）都是
+        // 盯着版本号决定要不要重建的，版本一变它们就会立刻读 `currentLyricsProvider`。
+        currentLyricsProvider = overlayDto.providerName
+        currentLyricsVersion += 1
+        writeDebugLog("[Lyrics] provider: \(overlayDto.providerName)")
+
+        // 数据到达即刷新逐词 overlay：9.1.x 上内嵌宿主是 NPV，
+        // 它只在进入正在播放页时出现一次，不会因为这首歌词到了再来一次。
+        // `WordByWordHost` 是 @MainActor 隔离的，必须经 `onMainThreadSync` 这个
+        // 本模块既有的桥进入（ng 的 hook 里也都是这么写的）。
+        onMainThreadSync {
+            WordByWordHost.shared.refreshForCurrentLyrics()
+        }
+    }
+
+    /// 把逐词层的全局状态清空，并把已经挂上的层摘掉。
+    ///
+    /// 用于"这一首没有我们的歌词"（取词失败 / 用户选了 `notReplaced`）：
+    /// 旧层的 `setCurrentTime` 与新层的 `update()` 都以"有没有可用数据"为准，
+    /// 数据一清：
+    ///   · 旧层整块透明 + 触摸穿透 → 原生歌词与控件原样可用；
+    ///   · 新层因为没有行模型而 `detach()` → 同上。
+    private func resetWordByWordLyrics() {
+        writeDebugLog("[Lyrics] no custom lyrics for this track — clearing word-by-word layer")
+        currentLyricsDto = nil
+        currentLyricsProvider = ""
+        currentLyricsVersion += 1
+        onMainThreadSync {
+            WordByWordHost.shared.clearForUnavailableLyrics()
+        }
+    }
+
     /// 把来源返回的 DTO 转成注入 Spotify 的 `Lyrics`，并同步全局状态
-    /// （`currentLyricsDto` / `currentLyricsVersion` / `lyricsState`）。
+    /// （`currentLyricsDto` / `currentLyricsVersion` / `currentLyricsProvider` / `lyricsState`）。
+    ///
+    /// - Parameter source: **实际**产出这份 dto 的源（Genius 兜底时是 `.genius`，
+    ///   不是用户设的那个）。来源标签与注入给 Spotify 的 `providedBy` 都用它。
     private func makeLyrics(from dto: LyricsDto, source: LyricsSource) -> Lyrics {
         lyricsState.isEmpty = dto.lines.isEmpty
         lyricsState.wasRomanized = dto.romanization == .romanized
             || dto.romanization == .canBeRomanized
         lyricsState.loadedSuccessfully = true
 
-        currentLyricsDto = dto.romanizedForWordByWordIfEnabled()
-        currentLyricsVersion += 1
-        // 同上一处：数据到达后主动重挂（切歌时宿主不变，只能靠这里刷新）。
-        // 同样必须经 `onMainThreadSync` 进入 @MainActor 的 `WordByWordHost`。
-        onMainThreadSync {
-            WordByWordHost.shared.refreshForCurrentLyrics()
-        }
+        storeLyricsDto(dto, source: source)
 
         return Lyrics.with {
             $0.data = dto.toSpotifyLyricsData(
@@ -317,6 +376,8 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     writeDebugLog("[Lyrics] Request for \(originalPath)")
     guard !NgzhwmSettingsViewModel.isLyricsFeatureDisabled else {
         writeDebugLog("[Lyrics] Feature disabled — refusing")
+        // 功能被关掉时同样要把逐词层清干净：否则它会继续盖着原生歌词显示旧内容。
+        resetWordByWordLyrics()
         throw LyricsError.invalidSource
     }
 
@@ -347,7 +408,25 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
         throw LyricsError.trackMismatch
     }
 
-    var lyrics = try loadCustomLyricsForCurrentTrack()
+    var lyrics: Lyrics
+    do {
+        lyrics = try loadCustomLyricsForCurrentTrack()
+    } catch let error {
+        // 这一首没能用上我们的歌词（Spotify 会显示自己的原生歌词）→ 把逐词层的
+        // 状态清干净。不清的话上一个 overlay 会继续盖在原生歌词上显示**上一首**的内容，
+        // 连底部的来源注解也是上一首的 —— 这是"注解显示 PetitLyrics"的另一半成因。
+        //
+        // ⚠️ 两种错误不清：`.trackMismatch` / `.noCurrentTrack` 表示"这次请求不是
+        // 针对当前这首歌"（Spotify 会预取别的歌、或启动时序还没对齐）。那两种情况
+        // 跟屏幕上正在显示的那一首无关，清掉等于把好好的歌词一起清掉。
+        switch error as? LyricsError {
+        case .some(.trackMismatch), .some(.noCurrentTrack):
+            break
+        default:
+            resetWordByWordLyrics()
+        }
+        throw error
+    }
 
     let lyricsColorsSettings = UserDefaults.lyricsColors
 
@@ -416,8 +495,10 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
         )
     }
 
-    // 记录歌词提供者，供全屏 overlay 底部展示
-    currentLyricsProvider = lyrics.data.providedBy
+    // 歌词提供者**不在这里写**：它已经由 `storeLyricsDto(_:source:)` 与 dto 同时写好了
+    // （`currentLyricsProvider`）。在这个函数末尾再写一次的话，写的是 `lyrics.data.providedBy`，
+    // 而那份 protobuf 是**先前**构造的 —— 与 dto 分属两个时刻，正是"注解慢一拍"的老毛病。
+    // 需要提供者时读 `currentLyricsProvider` / `currentLyricsDto?.providerName`。
 
     return try lyrics.serializedBytes()
 }

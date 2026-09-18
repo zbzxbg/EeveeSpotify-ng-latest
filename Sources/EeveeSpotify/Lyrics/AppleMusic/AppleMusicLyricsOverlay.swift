@@ -35,7 +35,11 @@ final class AppleMusicLyricsClock: ObservableObject {
 struct AppleMusicLyricsOverlayView: View {
 
     /// 行模型。换歌时由外部替换。
-    let lines: [LyricLine]
+    ///
+    /// ⚠️ 是 `var` 而不是 `let`：切歌时 `update()` 走的是"就地更新、不重建 hosting
+    /// controller"那条路（为了保住滚动位置），而那条路以前**没有任何地方写回行模型** ——
+    /// 结果就是"壳上的曲名/歌手换了，歌词还是上一首的"。
+    var lines: [LyricLine]
     /// 背景样式（`.stage` 全屏 / `.card` 预览）。
     ///
     /// ⚠️ 是 `var` 而不是 `let`：全屏 ↔ 预览切换、以及"实心档"变化时，
@@ -147,7 +151,13 @@ struct AppleMusicLyricsOverlayView: View {
                     closeContent: showsShell ? AnyView(shellClose) : nil,
                     // 全屏：曲名 + 歌手两行（62）；预览：一行「歌词」+ 两个按钮（39，
                     // 由宿主按"卡片高度 − 歌词视图高度"实测传入）。
-                    headerHeight: previewHeaderInset > 0 ? previewHeaderInset : 62,
+                    //
+                    // 预览的兜底值刻意是 39 而不是 62：量不到卡片容器时（退化挂到歌词
+                    // 视图上）用全屏那两行的高度会让标题栏占掉卡片 1/5 的高度，
+                    // 把歌词整体往下推一截；预览标题栏本来就只有一行。
+                    headerHeight: previewHeaderInset > 0
+                        ? previewHeaderInset
+                        : (showsProviderFooter ? 62 : 39),
                     // ⚠️ 预览必须传 0：卡片里 `safeArea.top == 0`，再用全屏那套 -30
                     // 会把整条标题栏推到卡片外面 —— 表现就是"预览一个按钮都没有"。
                     headerTopInset: showsProviderFooter ? -30 : 0,
@@ -327,8 +337,9 @@ final class AppleMusicLyricsOverlayHost {
         solidBackdrop: Bool = false,
         previewHeaderInset: CGFloat = 0
     ) {
-        // 数据变了就重建视图（换歌 / 重新取词）。
-        if currentVersion != currentLyricsVersion {
+        // 数据变了就重建行模型（换歌 / 重新取词）。
+        let lyricsChanged = currentVersion != currentLyricsVersion
+        if lyricsChanged {
             currentVersion = currentLyricsVersion
             currentLines = (currentLyricsDto?.toAppleMusicLyricLines()) ?? []
             refreshShellMetadata()
@@ -370,6 +381,16 @@ final class AppleMusicLyricsOverlayHost {
                 hostingController.rootView.showsProviderFooter = showsProviderFooter
                 hostingController.rootView.previewHeaderInset = previewHeaderInset
             }
+            // ⚠️ 换歌时**必须把新的行模型写回 rootView**。
+            //
+            // 这条提前返回的路径不重建 hosting controller（为的是保住滚动位置），
+            // 而 `lines` 以前是 `let`、这里也没有任何地方更新它 —— 于是出现
+            // "壳上的曲名/歌手换了，歌词却还是上一首的"。
+            // 现在 `lines` 是 `var`，行模型与壳文本在同一个地方一起对齐。
+            if lyricsChanged {
+                hostingController.rootView.lines = lines
+                writeDebugLog("[AppleMusicLyrics] lines updated in place (\(lines.count) line(s))")
+            }
             // 换歌时壳上的曲名 / 歌手也要跟着换（歌词数据变了就说明换歌了）。
             if hostingController.rootView.trackTitle != currentTrackTitle {
                 hostingController.rootView.trackTitle = currentTrackTitle
@@ -400,6 +421,10 @@ final class AppleMusicLyricsOverlayHost {
             // 壳文本也一起对齐（换歌 + 换挂载点可能同时发生）。
             hosting.rootView.trackTitle = currentTrackTitle
             hosting.rootView.trackArtist = currentTrackArtist
+            // 行模型同理：就地复用的那条路上也要写回新歌词。
+            if lyricsChanged {
+                hosting.rootView.lines = lines
+            }
         } else {
             detach()
             hosting = UIHostingController(
@@ -420,6 +445,7 @@ final class AppleMusicLyricsOverlayHost {
         currentSideInset = sideInset
         currentShowsProviderFooter = showsProviderFooter
         currentSolidBackdrop = solidBackdrop
+        currentPreviewHeaderInset = previewHeaderInset
 
         hosting.view.removeFromSuperview()
 
@@ -462,6 +488,23 @@ final class AppleMusicLyricsOverlayHost {
         writeDebugLog("[AppleMusicLyrics] overlay detached")
     }
 
+    /// 歌词换了一首（或重新取到）时叫一次：把新行模型就地写进已挂着的层。
+    ///
+    /// 为什么需要这个入口：`update()` 只在挂载时被调用，而切歌时宿主没变、
+    /// `WordByWordHost.attach` 的提前返回不会放行 —— 全屏页开着不动切歌的话，
+    /// 新歌词永远推不进这一层（"壳上的曲名换了、歌词还是上一首"）。
+    /// 用上次挂载的参数重放一次 `update` 即可，什么都不用记第二份。
+    func refreshLinesIfNeeded() {
+        guard let host = hostView, currentVersion != currentLyricsVersion else { return }
+        update(
+            in: host,
+            sideInset: currentSideInset,
+            showsProviderFooter: currentShowsProviderFooter,
+            solidBackdrop: currentSolidBackdrop,
+            previewHeaderInset: currentPreviewHeaderInset
+        )
+    }
+
     /// 换歌时更新壳上的曲名 / 歌手。
     ///
     /// 为什么从 `SPTPlayerTrack` 取而不是从歌词数据：歌词里没有歌手名，
@@ -496,6 +539,17 @@ final class AppleMusicLyricsOverlayHost {
     /// 避免新层自带时钟与主时钟错拍。
     func tick(ms: Double) {
         guard hostView != nil, !currentLines.isEmpty else { return }
+        // ⚠️ "每帧置于最前"这件事**只能在这里做**。
+        //
+        // `update()` 里那句 `bringSubviewToFront` 只在挂载/刷新时才跑，而预览卡片里的
+        // 原生内容（歌词视图、Element 那些层）会在滚动、换行、cell 复用时**重排
+        // subviews**，一次置前会被它们挤回去 —— 表现就是"预览里的逐词层时不时被盖住"。
+        // 这一句把注释里的承诺兑现掉；已经是最前时只花一次指针比较，不重排。
+        if let hostingView = hostingController?.view,
+           let host = hostingView.superview,
+           host.subviews.last !== hostingView {
+            host.bringSubviewToFront(hostingView)
+        }
         clock.submit(seconds: ms / 1000)
         // 自绘壳的进度条 / 时间 / 播放键状态也走同一个时钟。
         projection.refresh()

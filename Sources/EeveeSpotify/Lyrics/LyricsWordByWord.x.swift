@@ -215,8 +215,37 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     var showsProviderFooter = false
     /// 是否显示行级译文（全屏显示；内嵌「预览歌词」不显示）。
     var showsTranslation = true
+    /// 是否显示**播放控制**（全屏显示；内嵌预览不显示）。
+    ///
+    /// 为什么必须有：这一层在全屏时用的是**不透明**底色（见 `configureBackdropIfNeeded`），
+    /// 而它挂在 `vc.view` 的最前面 —— 原生那一页的标题栏、进度条、播放键、
+    /// 右上角收起键全被压在下面。不出自己的按键，用户在全屏里就是
+    /// "一个按键都没有"（Apple Music 新层有自绘壳，旧层以前没有）。
+    var showsPlaybackControls = false {
+        didSet {
+            guard showsPlaybackControls != oldValue else { return }
+            applyControlsVisibility(showsPlaybackControls)
+        }
+    }
     /// 行级译文标签（每行原文下面一行小字），用于 rebuild 清理。
     private var translationLabels: [UILabel] = []
+    /// 全屏控制条（上一首 / 播放暂停 / 下一首）。
+    private let controlsBar = UIStackView()
+    /// 中间那颗播放/暂停键。单独持引用是为了切图标时不必去猜它在 stack 里的下标。
+    private let playPauseButton = UIButton(type: .system)
+    /// 全屏右上角收起键。
+    private let closeButton = UIButton(type: .system)
+    /// 控制条占掉的高度（歌词底部留白要跟着让出来）。
+    private let controlsBarHeight: CGFloat = 64
+    /// 上一次喂进来的时间 / 当前是否在播放 —— 用来切换播放键图标。
+    ///
+    /// "是否在播放"靠**位置是否在推进**推断（与 Apple Music 壳的
+    /// `AppleMusicLyricsPlaybackProjection` 同一套办法），不去猜未公开属性。
+    private var lastSubmittedMs: Double?
+    private var isPlayingNow = false
+    /// 控制条当前是否已按"可见"布置过（避免每帧重设约束常量）。
+    private var controlsApplied: Bool?
+    private var stackBottomConstraint: NSLayoutConstraint?
 
     private var dto: LyricsDto?
     private var dtoVersion = -1
@@ -337,6 +366,14 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         scrollView.addSubview(stackView)
         addSubview(topFadeView)
         addSubview(bottomFadeView)
+        // 控制条与收起键**最后加**：它们要浮在渐隐层与歌词之上。
+        setupPlaybackControls()
+
+        let stackBottom = stackView.bottomAnchor.constraint(
+            equalTo: scrollView.contentLayoutGuide.bottomAnchor,
+            constant: -60
+        )
+        stackBottomConstraint = stackBottom
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor),
@@ -344,7 +381,7 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             stackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: lyricsTopPadding),
-            stackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -60),
+            stackBottom,
         ])
 
         // 左右/宽度单独建，便于全屏时调整左边距
@@ -359,10 +396,159 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         // 背景必须在最底层 —— 放在所有子视图添加完之后再插到 index 0，
         // 不依赖 addSubview 的调用顺序。
         insertSubview(backdropView, at: 0)
+
+        applyControlsVisibility(showsPlaybackControls)
+    }
+
+    // MARK: 全屏播放控制（旧层的"壳"）
+
+    /// 全屏控制条：上一首 / 播放暂停 / 下一首，外加右上角收起键。
+    ///
+    /// 三个动作全部转发给 `WordByWordPlaybackControl`（它按无障碍 id/标签
+    /// 找原生控件，或直接调 `statefulPlayer`）。**不自己拼私有播放接口** ——
+    /// 那套签名没有承诺，找原生控件反而是最稳的。
+    private func setupPlaybackControls() {
+        controlsBar.axis = .horizontal
+        controlsBar.alignment = .center
+        controlsBar.distribution = .equalSpacing
+        controlsBar.spacing = 44
+        controlsBar.translatesAutoresizingMaskIntoConstraints = false
+        controlsBar.isHidden = true
+
+        controlsBar.addArrangedSubview(
+            makeTransportButton(systemName: "backward.fill", pointSize: 22, action: #selector(handlePrevious))
+        )
+
+        let configuration = UIImage.SymbolConfiguration(pointSize: 30, weight: .medium)
+        playPauseButton.setImage(UIImage(systemName: "play.fill", withConfiguration: configuration), for: .normal)
+        playPauseButton.tintColor = .white
+        playPauseButton.addTarget(self, action: #selector(handlePlayPause), for: .touchUpInside)
+        playPauseButton.accessibilityLabel = "play"
+        controlsBar.addArrangedSubview(playPauseButton)
+
+        controlsBar.addArrangedSubview(
+            makeTransportButton(systemName: "forward.fill", pointSize: 22, action: #selector(handleNext))
+        )
+
+        closeButton.setImage(
+            UIImage(
+                systemName: "chevron.down",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+            ),
+            for: .normal
+        )
+        closeButton.tintColor = .white
+        closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.28)
+        closeButton.layer.cornerRadius = 20
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.isHidden = true
+        closeButton.accessibilityLabel = "close"
+        closeButton.addTarget(self, action: #selector(handleClose), for: .touchUpInside)
+
+        addSubview(controlsBar)
+        addSubview(closeButton)
+
+        NSLayoutConstraint.activate([
+            controlsBar.centerXAnchor.constraint(equalTo: centerXAnchor),
+            controlsBar.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -6),
+            controlsBar.heightAnchor.constraint(equalToConstant: 56),
+            closeButton.widthAnchor.constraint(equalToConstant: 40),
+            closeButton.heightAnchor.constraint(equalToConstant: 40),
+            closeButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            closeButton.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 4),
+        ])
+    }
+
+    private func makeTransportButton(
+        systemName: String,
+        pointSize: CGFloat,
+        action: Selector
+    ) -> UIButton {
+        let button = UIButton(type: .system)
+        let configuration = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
+        button.setImage(UIImage(systemName: systemName, withConfiguration: configuration), for: .normal)
+        button.tintColor = .white
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
+
+    /// 如果自己不在宿主的最前面就抬一次（已经是最前时什么都不做）。
+    ///
+    /// 每帧都会被调用，所以不能真的每次都重排 subviews —— 那会让 UIKit 每帧都做一次
+    /// 数组搬移与图层重排。
+    private func ensureFrontmost() {
+        guard let host = superview, host.subviews.last !== self else { return }
+        host.bringSubviewToFront(self)
+    }
+
+    /// 显示 / 隐藏控制条与收起键，并让歌词底部留出同样的空。
+    ///
+    /// ⚠️ 带缓存：`setCurrentTime` 每帧都会调到这里，而改 `constant` 会让 UIKit
+    /// 重新跑一轮布局 —— 每帧重设一次等于每帧无谓地失效一次布局。
+    private func applyControlsVisibility(_ visible: Bool) {
+        guard controlsApplied != visible else { return }
+        controlsApplied = visible
+        controlsBar.isHidden = !visible
+        closeButton.isHidden = !visible
+        // 歌词底部留白：可见时多让出控制条的高度，否则最后几行会被压在控制条下面。
+        stackBottomConstraint?.constant = visible ? -(60 + controlsBarHeight) : -60
+    }
+
+    @objc private func handlePrevious() {
+        WordByWordPlaybackControl.skipToPrevious()
+    }
+
+    @objc private func handlePlayPause() {
+        WordByWordPlaybackControl.togglePlayPause()
+    }
+
+    @objc private func handleNext() {
+        WordByWordPlaybackControl.skipToNext()
+    }
+
+    @objc private func handleClose() {
+        WordByWordPlaybackControl.dismissFullscreen()
+    }
+
+    /// 按"位置是否在推进"推断播放状态，并切换播放/暂停图标。
+    private func updatePlaybackState(_ ms: Double) {
+        guard showsPlaybackControls else { return }
+        let previous = lastSubmittedMs
+        lastSubmittedMs = ms
+
+        let playing: Bool
+        if let previous {
+            if ms > previous + 0.001 {
+                playing = true
+            } else if abs(ms - previous) <= 0.001 {
+                playing = false
+            } else {
+                // 往回跳（seek / 上一首）：保持上一次的判断，别闪一下图标。
+                playing = isPlayingNow
+            }
+        } else {
+            playing = isPlayingNow
+        }
+
+        guard playing != isPlayingNow else { return }
+        isPlayingNow = playing
+        playPauseButton.setImage(
+            UIImage(
+                systemName: playing ? "pause.fill" : "play.fill",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 30, weight: .medium)
+            ),
+            for: .normal
+        )
     }
 
     /// 每帧由时钟调用：惰性取 dto、词级高亮、自动滚动。
     func setCurrentTime(_ ms: Double) {
+        updatePlaybackState(ms)
+        // 原生内容（卡片里的歌词视图 / Element 各层）会在重排 subviews 时把我们挤下去，
+        // 那一下 "bringSubviewToFront" 就白做了 —— 表现是"预览里的逐词层时不时被盖住"。
+        // 每帧补一次；已经是最前时只花一次指针比较。
+        ensureFrontmost()
+
         if dtoVersion != currentLyricsVersion {
             dto = currentLyricsDto
             dtoVersion = currentLyricsVersion
@@ -382,11 +568,15 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             topFadeView.isHidden = true
             bottomFadeView.isHidden = true
             isUserInteractionEnabled = false   // 回退原生时让触摸穿透，别挡住原生歌词滚动
+            // 整层都交还给原生时，自绘控制条也必须一起交还 ——
+            // 否则会留下两颗悬浮的按钮压在 Spotify 原生界面上。
+            applyControlsVisibility(false)
             return
         }
 
         stackView.isHidden = false
         isUserInteractionEnabled = true
+        applyControlsVisibility(showsPlaybackControls)
         updateFadeVisibility()
 
         var bestLine = -1
@@ -693,6 +883,8 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
               hasUsableWordLevelData(currentLyricsDto) else {
             backgroundColor = .clear
             backdropView.isHidden = true
+            // 同 `setCurrentTime`：整层交还原生时控制条也要一起交还。
+            applyControlsVisibility(false)
             return
         }
 
@@ -903,6 +1095,15 @@ final class WordByWordHost {
     private weak var lastPreviewContentView: UIView?
     /// 最近出现的内嵌歌词 VC（弱引用），全屏关闭后据此重新挂载。
     private weak var lastInlineController: UIViewController?
+    /// 最近一次"全屏页"挂载用的 VC 与左边距（弱引用 + 参数）。
+    ///
+    /// 全屏页在整段停留期间宿主不会重建，所以这个引用一直有效。它的用途是补一种
+    /// 罕见的断档：新层会因为"当前这首歌没有逐词数据"而把自己摘掉
+    /// （`AppleMusicLyricsOverlayHost.update` 在行模型为空时 `detach()`），
+    /// 而全屏页的 appear 回调**不会再来第二次** —— 没有这个锚点，下一首有逐词数据时
+    /// 就没人能把层挂回去，页面会一直停在 Spotify 原生歌词上。
+    private weak var fullscreenController: UIViewController?
+    private var fullscreenSideInset: CGFloat = 24
     /// 关闭全屏时留在原宿主上的静态替身（见 `handOffToInlineKeepingStandIn`）。
     private var transitionStandInView: UIView?
 
@@ -910,9 +1111,58 @@ final class WordByWordHost {
         lastInlineController = controller
     }
 
+    /// 内嵌（预览）层是否**已经挂上、而且还在窗口里**。
+    ///
+    /// 给 `InlineLyricsHostLocator` 的看门狗用：预览歌词卡片是自适应表格 cell
+    /// （`Lyrics_TextElementImpl.LyricsCell` + `SelfSizingTableView`），滚动、换行、
+    /// 换歌时都会被复用重建 —— 我们的层挂在卡片上，卡片一被销毁层就跟着没了。
+    /// 这是"预览里的逐词歌词时有时无"的第二个成因，看门狗据此重新查找宿主。
+    var inlineOverlayIsLive: Bool {
+        guard isAttached, !attachedShowsProviderFooter else { return false }
+        if #available(iOS 26.0, *), let view = AppleMusicLyricsOverlayHost.shared.overlayView {
+            return view.superview != nil && view.window != nil
+        }
+        guard let overlay else { return false }
+        return overlay.superview != nil && overlay.window != nil
+    }
+
+    /// 全屏层是否正挂在屏上。
+    ///
+    /// 同上看门狗：全屏页是盖在内嵌页之上的 sheet，内嵌页的 `viewWillAppear`
+    /// 不会重来，看门狗一直在跑；**没有这道闸门它会把全屏的层拽回卡片**。
+    var fullscreenOverlayIsAttached: Bool {
+        isAttached && attachedShowsProviderFooter
+    }
+
+    /// 这一首**没有**我们的歌词了（取词失败 / 用户选了原生歌词）时调用：
+    /// 把已经挂上的层摘掉，并把"宿主已经渲染到哪个版本"也一并作废。
+    ///
+    /// 为什么不只是 `detach()`：`renderedLyricsVersion` 留着的话，下次
+    /// `attach` 会以为"这个宿主上已经是当前版本了"而提前返回 —— 而实际上
+    /// 层已经被摘掉，屏幕上是空的（原生歌词）。作废之后重新挂就一定成立。
+    func clearForUnavailableLyrics() {
+        detach()
+        renderedLyricsVersion = -1
+    }
+
+    /// 关闭全屏后把 overlay 交还内嵌（预览）。
     func reattachToInline() {
-        guard let controller = lastInlineController else { return }
-        attach(to: controller, showsTranslation: false)
+        // ⚠️ 必须用**上次预览的挂载点**（卡片里的歌词视图），不能用
+        // `lastInlineController.view` —— 那是正在播放页的根视图：`cardContainer(for:)`
+        // 在它身上找不到卡片，于是退回"整页"，我们的卡片背景铺满整个正在播放页。
+        // 这就是"退出全屏后预览变全屏"。
+        if let controller = lastPreviewController,
+           let contentView = lastPreviewContentView {
+            attach(to: controller, contentView: contentView, showsTranslation: false)
+            return
+        }
+        if let controller = lastInlineController {
+            // 兜底：`attach` 内部有"整页大小一律拒绝"的判据，不会再变成全屏。
+            attach(to: controller, showsTranslation: false)
+            return
+        }
+        // 两个宿主都没记住（例如卡片在进全屏期间被重建）→ 让看门狗重新查找。
+        InlineLyricsHostLocator.retryLookupIfNeeded()
     }
 
     /// 歌词数据到达后调用一次：把 overlay 重挂到**当前这首歌**的数据上。
@@ -922,14 +1172,49 @@ final class WordByWordHost {
     /// 所以"挂载早于数据到达"和"切歌后不刷新"这两件事都没有第二次机会。
     /// ng 原来的触发点（歌词卡片自己的 VC）天然每首歌都会再来一次，不需要这个通知。
     ///
-    /// 全屏页有自己的 appear 回调、时序正常，所以这里不抢它的宿主。
+    /// 全屏页不抢它的宿主：只在**同一个**全屏 VC 上刷新行模型（必要时补挂一次），
+    /// 绝不把全屏的层挪回卡片。
     func refreshForCurrentLyrics() {
         guard renderEnabled else { return }
-        if isAttached && attachedShowsProviderFooter { return }
-        guard let controller = lastPreviewController,
-              let contentView = lastPreviewContentView else { return }
-        writeDebugLog("[WordByWord] refresh for current lyrics (version \(currentLyricsVersion))")
-        attach(to: controller, contentView: contentView, showsTranslation: false)
+
+        // 全屏层自己会跟着版本号刷新（Apple Music 层是"就地更新行模型"，
+        // 见 `AppleMusicLyricsOverlayHost.update`），但**必须有人去叫它** ——
+        // 切歌时它挂在同一个宿主上、`attach` 的提前返回不会放行，
+        // 不主动刷就会一直显示上一首的歌词。
+        if isAttached && attachedShowsProviderFooter {
+            if #available(iOS 26.0, *) {
+                // 新层可能已经因为"当前这首歌没有逐词数据"而自己摘掉了
+                // （`AppleMusicLyricsOverlayHost.update` 在行模型为空时 `detach()`）。
+                // 那时 `refreshLinesIfNeeded()` 的 guard 会直接返回，而全屏页的
+                // appear 回调不会再来 —— 新歌词就永远推不进去。所以这里要能补挂一次。
+                if NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled,
+                   hasUsableWordLevelData(currentLyricsDto),
+                   AppleMusicLyricsOverlayHost.shared.overlayView == nil,
+                   let controller = fullscreenController {
+                    writeDebugLog("[WordByWord] fullscreen layer was dropped — reattaching")
+                    attach(
+                        to: controller,
+                        sideInset: fullscreenSideInset,
+                        showsProviderFooter: true
+                    )
+                    return
+                }
+                AppleMusicLyricsOverlayHost.shared.refreshLinesIfNeeded()
+            }
+            return
+        }
+
+        // 预览层：歌词比卡片先到是常态（卡片要等数据才建），所以这里**不能**
+        // 因为"还没记住宿主"就放弃 —— 那正是"预览逐词几乎不挂载"的原因。
+        if let controller = lastPreviewController,
+           let contentView = lastPreviewContentView {
+            writeDebugLog("[WordByWord] refresh for current lyrics (version \(currentLyricsVersion))")
+            attach(to: controller, contentView: contentView, showsTranslation: false)
+            return
+        }
+
+        // 还没找到内嵌宿主 → 让宿主查找看门狗立刻再查一次。
+        InlineLyricsHostLocator.retryLookupIfNeeded()
     }
 
     private var renderEnabled: Bool {
@@ -955,6 +1240,29 @@ final class WordByWordHost {
         guard renderEnabled else { return }
         let view = contentView ?? controller.view
         guard let view else { return }
+
+        // ── 先把「内嵌预览的宿主」记下来，**早于任何数据判据** ────────────────────
+        //
+        // 这一步是"预览逐词几乎不挂载"的关键。9.1.x 上内嵌宿主只在进入正在播放页时
+        // 出现一次（NPV 的 `viewWillAppear`），而那一刻歌词往往还在路上 ——
+        // 于是 `usable == false`，函数直接返回。这两条记忆以前写在函数末尾的
+        // AppleMusic 分支里，结果就是"数据没到 → 什么都没记住"，
+        // 等歌词到达时 `refreshForCurrentLyrics()` 找不到宿主，只能放弃。
+        //
+        // 现在无论数据到没到、走新层还是旧层，宿主都先记下来。
+        // ⚠️ 只记"不是整页大小"的内容视图：整页根本不是卡片里的歌词视图，
+        // 记下来只会在下次 `attach` 时把层铺满整页（预览变全屏）。
+        if !showsProviderFooter {
+            lastInlineController = controller
+            if !Self.isPageSized(view) {
+                lastPreviewController = controller
+                lastPreviewContentView = view
+            }
+        } else {
+            // 全屏页：记住锚点与参数，供"层被摘掉之后的下一次刷新"重新挂载。
+            fullscreenController = controller
+            fullscreenSideInset = sideInset ?? 24
+        }
 
         // 已挂在同一视图上、**且渲染的就是当前这首的歌词**时才算完成；
         // 宿主没变但歌词换了（切歌）也要重新走一遍 —— 下面紧接着就是 detach + 重挂。
@@ -999,7 +1307,24 @@ final class WordByWordHost {
             // 壳这一层从此由我们画（`previewHeader` 就是那一行），粉杠问题不复存在。
             //
             // 全屏不受影响：它本来就挂 vc.view，并且自己画了整套壳。
-            let mountView = showsProviderFooter ? view : (Self.cardContainer(for: view) ?? view)
+            var mountView = showsProviderFooter ? view : (Self.cardContainer(for: view) ?? view)
+            if !showsProviderFooter, Self.isPageSized(mountView) {
+                // 卡片判据把"整页"当成了卡片（`cardContainer` 的尺寸启发式在
+                // 宿主根视图上必然如此）。照挂就是"预览变全屏"：一块卡片背景
+                // 铺满整个正在播放页，把原生界面全盖住。
+                guard !Self.isPageSized(view) else {
+                    writeDebugLog(
+                        "[WordByWord] ⚠️ no safe preview mount point"
+                            + " (\(NSStringFromClass(type(of: mountView))) is page-sized) — skipped"
+                    )
+                    return
+                }
+                writeDebugLog(
+                    "[WordByWord] preview mount view is page-sized"
+                        + " (\(NSStringFromClass(type(of: mountView)))) — falling back to lyrics view"
+                )
+                mountView = view
+            }
             // 卡片比歌词视图高出来的那段（实测 39pt）= 我们自绘标题栏要占的高度。
             // 全屏传 62（曲名 + 歌手两行，与页面默认值一致）。
             let headerInset = showsProviderFooter
@@ -1028,10 +1353,9 @@ final class WordByWordHost {
             }
             WordByWordPlaybackClock.shared.start()
             attachedShowsProviderFooter = showsProviderFooter
-            if !showsProviderFooter {
-                lastPreviewController = controller
-                lastPreviewContentView = view
-            }
+            // 预览挂载点在函数开头就记好了（那时还没有数据判据）；
+            // 这里**不要**再记一次 `view` —— 它可能是整页大小的宿主根视图，
+            // 覆盖掉正确的记录就又把"预览变全屏"放回来了。
             hostView = view
             isAttached = true
             renderedLyricsVersion = currentLyricsVersion
@@ -1047,10 +1371,28 @@ final class WordByWordHost {
         // 铺一层空白背景比直接放行原生渲染更糟。
         guard usable else { return }
 
+        // ⚠️ 旧层同样不许挂到"整页大小"的视图上。
+        //
+        // 旧实现没有"卡片容器"这个概念，挂哪儿就铺满哪儿，而且底色是**不透明**的 ——
+        // 一旦挂到正在播放页的根视图上，整页原生界面（含那两颗按钮）会被盖光，
+        // 表现与"预览变全屏"完全一样。触发路径就是 `reattachToInline()` 的兜底分支
+        // （只记住了整页 VC、没记住卡片里的歌词视图时）。宁可不出层，交还原生。
+        if !showsProviderFooter, Self.isPageSized(view) {
+            writeDebugLog(
+                "[WordByWord] ⚠️ preview host is page-sized"
+                    + " (\(NSStringFromClass(type(of: view)))) — skipped"
+            )
+            return
+        }
+
         let overlayView = LyricsWordByWordOverlayView(frame: view.bounds)
         overlayView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         overlayView.showsProviderFooter = showsProviderFooter
         overlayView.showsTranslation = showsTranslation
+        // 全屏时这一层会把整页盖住（旧实现用的是**不透明**底色），原生的标题栏、
+        // 进度条、播放键、收起键全在它下面 —— 不自己出按键就等于"全屏一个按键都没有"。
+        // 预览不进这条路：卡片上那颗原生的展开/分享键就在我们层之上，够用。
+        overlayView.showsPlaybackControls = showsProviderFooter
         // 全屏时背景改成"舞台式"：溢出到容器之外铺满整屏、均匀暗化。
         // 目的是让 Spotify 原有的 header / 控件栏和歌词落在同一块背景上，
         // 消除"品红壳 / 暗色肉"的割裂。内嵌预览保持卡片式。
@@ -1070,6 +1412,13 @@ final class WordByWordHost {
         overlay = overlayView
         hostView = view
         isAttached = true
+        // ⚠️ 这两条以前只在 Apple Music 分支里写。旧层漏掉之后有两个后果：
+        //   · `attachedShowsProviderFooter` 残留上一次的值 → 全屏时
+        //     `refreshForCurrentLyrics()` 以为"现在是预览"，于是把全屏的层拽掉重挂；
+        //   · `renderedLyricsVersion` 不更新 → 每次歌词版本变化都重挂一次（闪一下），
+        //     而旧层本来就会在 `setCurrentTime` 里自己按版本号 rebuild。
+        attachedShowsProviderFooter = showsProviderFooter
+        renderedLyricsVersion = currentLyricsVersion
 
         // 旧 overlay 的时间回调（新层走 `tickHandler`，两者互斥）。
         //
@@ -1235,6 +1584,37 @@ final class WordByWordHost {
         "Lyrics_CardElementImpl.CardView",
         "Lyrics_NPVCommunicatorImpl.CardView",
     ]
+
+    /// 这个视图是不是"整页大小"（正在播放页 / 全屏页的根视图）。
+    ///
+    /// 预览层只允许挂在**卡片**上。一旦挂到整页，表现就是"预览变成了全屏"：
+    /// 一块卡片背景铺满整个正在播放页，把原生界面（含卡片上那两颗按钮）全盖住 ——
+    /// 这正是"退出全屏后预览变全屏"的机制（`reattachToInline` 旧实现拿
+    /// `lastInlineController.view` 去当内容视图，那是整页的根视图）。
+    ///
+    /// 判据要求宽和高**同时**接近窗口：iPhone 上卡片约 374x300，
+    /// iPad 上卡片只占一列 —— 两个方向都不会贴满窗口。
+    /// 尺寸还来不及布局（bounds 为 0）或拿不到窗口时返回 false（不判断，保持旧行为）。
+    static func isPageSized(_ view: UIView) -> Bool {
+        let bounds = view.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return false }
+        guard let reference = referenceWindowSize(for: view) else { return false }
+        return bounds.width >= reference.width * 0.75
+            && bounds.height >= reference.height * 0.75
+    }
+
+    /// 判断尺寸用的参照（优先该视图自己所在的窗口，其次当前 key window）。
+    private static func referenceWindowSize(for view: UIView) -> CGSize? {
+        if let size = view.window?.bounds.size, size.width > 1, size.height > 1 {
+            return size
+        }
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+        let window = windows.first { $0.isKeyWindow } ?? windows.first
+        guard let size = window?.bounds.size, size.width > 1, size.height > 1 else { return nil }
+        return size
+    }
 
     /// 从 `view` 往上找第一个（也是最近的）匹配 `names` 的祖先。
     private static func ancestor(in view: UIView, matching names: Set<String>) -> UIView? {

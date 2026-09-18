@@ -10,6 +10,18 @@ struct LyricsDto {
     var romanization: LyricsRomanizationStatus
     var translation: LyricsTranslationDto? = nil
     var languageCode: String? = nil
+    /// 这份歌词**实际**是谁给的（形如 `"PetitLyrics (EeveeSpotify)"`）。
+    ///
+    /// 由 `CustomLyrics.storeLyricsDto(_:source:)` 在拿到数据的同一刻写入，
+    /// 也就是"提供者"与"正在渲染的那份 dto"永远同源。以前提供者是另一个全局
+    /// （`currentLyricsProvider`），在取词函数的**末尾**才写，而 dto 是中途就写好的，
+    /// 于是出现两种可见错误：
+    ///   · 旧 overlay 在 `rebuild()` 里读到的还是上一首的提供者（永远慢一拍）；
+    ///   · Genius 兜底成功时，标签写的是"用户设的那个源"而不是真正给词的 Genius。
+    ///
+    /// 有默认值，所以各 repository 既有的
+    /// `LyricsDto(lines:timeSynced:romanization:…)` 构造方式不受影响。
+    var providerName: String = ""
     
     func toSpotifyLyricsData(
         source: String,
