@@ -1,8 +1,8 @@
-Based on [EeveeSpotifyReincarnated](https://github.com/SideloadLabs/EeveeSpotifyReincarnated) and EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng).
+### Based on [EeveeSpotifyReincarnated](https://github.com/SideloadLabs/EeveeSpotifyReincarnated) and [EeveeSpotify-ng](https://github.com/zbzxbg/EeveeSpotify-ng).
 
 This repository is independently maintained by me and is not affiliated with whoeevee or SideloadLabs.
 
-The contents of this repository will be updated when [EeveeSpotify-ng](https://github.com/zbzxbg/EeveeSpotify-ng) or EeveeSpotifyReincarnated(https://github.com/SideloadLabs/EeveeSpotifyReincarnated) is updated (within two weeks of the aforementioned repositories releasing a new version).
+The contents of this repository will be updated when [EeveeSpotify-ng](https://github.com/zbzxbg/EeveeSpotify-ng) or [EeveeSpotifyReincarnated](https://github.com/SideloadLabs/EeveeSpotifyReincarnated) is updated (within two weeks of the aforementioned repositories releasing a new version).
 
 | | Version |
 | --- | --- |
