@@ -1135,21 +1135,32 @@ final class WordByWordHost {
             depth += 1
         }
 
-        // 尺寸启发式失败 → 按 9.1.x 实际存在的歌词容器类名兜底（最多上溯 12 层）。
+        // 尺寸启发式失败 → 按 9.1.x 实际存在的类名兜底（最多上溯 12 层）。
+        //
+        // ⚠️ 两段式，顺序很关键：
+        //   1) 先整条链找**卡片本体**（`…CardView`）。它含 `CardHeaderView`（"歌词" +
+        //      分享/展开那一行）+ `CardContentView`，我们那层壳正是要盖住整张卡片。
+        //      只匹配到 `CardContentView` 的后果已在真机截图实证：**两层壳** ——
+        //      Spotify 的标题栏露在外面，我们又画了一个，尺寸还完全相同
+        //      （日志 `CardContentView 342x256 lyrics=342x256`，headerInset 算成 0）。
+        //   2) 找不到卡片本体，才退到通用容器，并且**取最外层**那一个（最接近整张卡片），
+        //      而不是自下往上第一个命中的。
+        if let card = ancestor(in: view, matching: Self.preferredCardClassNames) {
+            return logAndReturnCardContainer(card, lyrics: view, label: "card")
+        }
+
+        var outermost: UIView?
         var fallback: UIView? = view.superview
         var fallbackDepth = 0
         while let node = fallback, fallbackDepth < 12 {
             if Self.knownCardContainerClassNames.contains(NSStringFromClass(type(of: node))) {
-                writeDebugLog(
-                    "[PreviewShell] card container (by class)="
-                        + "\(NSStringFromClass(type(of: node)))"
-                        + " \(Int(node.bounds.width))x\(Int(node.bounds.height))"
-                        + " lyrics=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
-                )
-                return node
+                outermost = node
             }
             fallback = node.superview
             fallbackDepth += 1
+        }
+        if let outermost {
+            return logAndReturnCardContainer(outermost, lyrics: view, label: "by class")
         }
 
         writeDebugLog("[PreviewShell] ⚠️ no card container found — falling back to lyrics view")
@@ -1178,20 +1189,45 @@ final class WordByWordHost {
         }
     }
 
-    /// 9.1.76 主二进制类名扫描确认存在的「预览歌词卡片」容器类。
+    /// **卡片本体**：优先级高于其它所有容器。9.1.76 上是
+    /// `Lyrics_CardElementImpl.CardView`（含标题栏 `CardHeaderView` + 内容区
+    /// `CardContentView`）。我们必须挂在这一层，才能让自绘的壳盖住 Spotify 的标题栏。
+    private static let preferredCardClassNames: Set<String> = [
+        "Lyrics_CardElementImpl.CardView",
+        "Lyrics_NPVCommunicatorImpl.CardView",
+    ]
+
+    /// 从 `view` 往上找第一个（也是最近的）匹配 `names` 的祖先。
+    private static func ancestor(in view: UIView, matching names: Set<String>) -> UIView? {
+        var node: UIView? = view.superview
+        var depth = 0
+        while let current = node, depth < 12 {
+            if names.contains(NSStringFromClass(type(of: current))) { return current }
+            node = current.superview
+            depth += 1
+        }
+        return nil
+    }
+
+    private static func logAndReturnCardContainer(
+        _ container: UIView,
+        lyrics: UIView,
+        label: String
+    ) -> UIView {
+        writeDebugLog(
+            "[PreviewShell] card container (\(label))="
+                + "\(NSStringFromClass(type(of: container)))"
+                + " \(Int(container.bounds.width))x\(Int(container.bounds.height))"
+                + " lyrics=\(Int(lyrics.bounds.width))x\(Int(lyrics.bounds.height))"
+        )
+        return container
+    }
+
+    /// 通用容器兜底（只在找不到卡片本体时使用；调用方取**最外层**命中者）。
     ///
-    /// ⚠️ 关键发现：9.1.76 里有一整个专门模块 `Lyrics_CardElementImpl`，
-    /// 卡片本体是 **`Lyrics_CardElementImpl.CardView`**（配套 `CardHeaderView` =
-    /// 「歌词/分享/展开」那一行，`CardContentView` = 卡片内容）。
-    /// ng 注释里提到的 `Lyrics_NPVCommunicatorImpl.CardView` **搬到了这个新模块**，
-    /// 这正是尺寸启发式在 9.1.76 上失效的原因。
-    ///
-    /// 只列歌词自己的容器；**不要**把滚动容器、`NPVScrollViewController` 一类加进来，
+    /// ⚠️ 只列歌词自己的容器；**不要**把滚动容器、`NPVScrollViewController` 一类加进来，
     /// 那会重新变成铺满整页。
     private static let knownCardContainerClassNames: Set<String> = [
-        // 9.1.76 的预览歌词卡片（首选）
-        "Lyrics_CardElementImpl.CardView",
-        "Lyrics_CardElementImpl.CardContentView",
         // 元素框架的包装层
         "Lyrics_NPVElementsKitImpl.LyricsElementContainerView",
         "Lyrics_NPVElementsKitImpl.LyricsElementWrapperView",
@@ -1200,8 +1236,8 @@ final class WordByWordHost {
         "Lyrics_TextElementImpl.LyricsCell",
         "Lyrics_TextComponentImpl.LyricsCell",
         "Lyrics_TextElementSingalongImpl.LyricsCell",
-        // 旧版本的卡片（9.1.76 已无，留作兼容）
-        "Lyrics_NPVCommunicatorImpl.CardView",
+        // 卡片内容区：比卡片本体小（不含标题栏），仅作最后备选
+        "Lyrics_CardElementImpl.CardContentView",
     ]
 
     private func installStandIn() {
