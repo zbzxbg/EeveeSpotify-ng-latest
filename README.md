@@ -12,7 +12,6 @@ The contents of this repository will be updated when EeveeSpotify-ng or EeveeSpo
 
 ## ⚠️ Notice
 
-- This repository only contains feature migrations from EeveeSpotify-ng.
 - It is recommended that you first familiarize yourself with the following three versions of Spotify before using this project:
   1. whoeevee's original EeveeSpotify 9.1.0
   2. EeveeSpotify-ng 9.1.0 (from the EeveeSpotify-ng project)
