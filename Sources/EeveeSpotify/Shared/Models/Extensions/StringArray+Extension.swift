@@ -3,6 +3,14 @@ import NaturalLanguage
 
 extension Array where Element == String {
     var canBeRomanized: Bool {
+        // 含假名的行直接算日语：与 dominantCJKLanguageAbove / romanizationLanguageCode
+        // 用同一套判定。否则逐行识别可能把日文判成非 CJK，使状态退化成 .original，
+        // 而 .original 会让 toSpotifyLyricsData 的总闸 canRomanize = false ——
+        // 三个罗马化开关会一起失效（日志里的 `romanization=original` 就是这个）。
+        if contains(where: { $0.containsJapaneseKanaForRomanization }) {
+            return true
+        }
+
         var languageList: [NLLanguage] = []
         
         for line in self {
@@ -19,6 +27,16 @@ extension Array where Element == String {
     /// 整首歌语言占比检测：把所有行合并后交给 NLLanguageRecognizer，
     /// 返回占比最高且高于阈值的 CJK 语言（日语/韩语/中文）；否则返回 nil。
     func dominantCJKLanguageAbove(threshold: Double) -> NLLanguage? {
+        // 只要出现假名就直接判定为日语。
+        // 原因：NLLanguageRecognizer 对「汉字偏多 / 文本较短」的日文经常给出
+        // simplifiedChinese，而 LyricsDto.romanizedIfEnabled 里 songLanguage 的
+        // 优先级高于上游算出的 languageHint —— 一旦这里判成中文，就会盖掉
+        // romanizationLanguageCode（它自带假名兜底）已经算对的 "ja"，
+        // 于是「只开日语罗马化」时整首歌都不会被罗马化。
+        if contains(where: { $0.containsJapaneseKanaForRomanization }) {
+            return .japanese
+        }
+
         let text = self.joined(separator: "\n")
         guard !text.isEmpty else { return nil }
 
