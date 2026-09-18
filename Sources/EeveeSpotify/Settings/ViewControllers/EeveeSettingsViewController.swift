@@ -45,16 +45,7 @@ class EeveeSettingsViewController: SPTPageViewController {
     
     override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
         super.motionEnded(motion, with: event)
-        guard motion == .motionShake, !hasShownSpecialLicense else { return }
-        hasShownSpecialLicense = true
-        
-        let alert = UIAlertController(
-            title: "Special License Detected",
-            message: "Subscribed to Elsa by Hysan since 2026.",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "Prayers for Hysan 🙏", style: .default))
-        WindowHelper.shared.present(alert)
+        // （已移除：摇一摇触发的 "Special License Detected / Hysan" 彩蛋）
     }
     
     @objc func openRepositoryUrl(_ sender: UIButton) {

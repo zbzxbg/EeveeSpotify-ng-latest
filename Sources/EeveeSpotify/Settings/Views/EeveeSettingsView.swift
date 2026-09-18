@@ -7,7 +7,6 @@ struct EeveeSettingsView: View {
     
     @State private var hasShownCommonIssuesTip = UserDefaults.hasShownCommonIssuesTip
     @State private var isClearingData = false
-    @State private var isPresentingDevNoteSheet = false
 
 
     private func confirmDestructive(
@@ -146,19 +145,9 @@ struct EeveeSettingsView: View {
 
             //
 
-            Section {
-                Button {
-                    isPresentingDevNoteSheet = true
-                } label: {
-                    HStack {
-                        Image(systemName: "person.fill.questionmark")
-                        Text("\("developer_note".localized)...")
-                    }
-                }
-            }
-            .sheet(isPresented: $isPresentingDevNoteSheet) {
-                EeveeDevNoteView()
-            }
+            // （已移除：Reincarnated 的「开发者手记」入口 EeveeDevNoteView ——
+            //   它从 SideloadLabs 仓库在线拉取 devnote.txt，内容是"只从官方
+            //   Telegram 频道下载 IPA"的提醒，与本仓库无关）
 
             Section(header: Text("debug_title".localized), footer: Text("enable_log_recording_description".localized)) {
                 Toggle(

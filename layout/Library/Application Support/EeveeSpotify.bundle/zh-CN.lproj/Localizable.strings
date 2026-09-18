@@ -281,6 +281,5 @@ OK = "确定";
 Cancel = "取消";
 Done = "完成";
 Loading = "加载中";
-developer_note = "开发者手记";
 episode_header = "单集 %@";
 anonymous_token_request_failed = "匿名令牌获取失败。";

@@ -177,7 +177,6 @@ musixmatch_restricted = "Restricted";
 invalid_musixmatch_token = "Unauthorized";
 decoding_error = "Decoding Error";
 unknown_error = "Unknown Error";
-developer_note = "Developer's Note";
 request_anonymous_token_description = "Tap “Request Anonymous Token” to request a token from Musixmatch without authorization.";
 resetButtonTitle = "Full Reset";
 resetSubtitle = "Each is independent.";
