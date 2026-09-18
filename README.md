@@ -17,7 +17,7 @@ The contents of this repository will be updated when EeveeSpotify-ng or EeveeSpo
   1. whoeevee's original EeveeSpotify 9.1.0
   2. EeveeSpotify-ng 9.1.0 (from the EeveeSpotify-ng project)
   3. SideloadLabs' EeveeSpotifyReincarnated
-- Verified environment: TBD
+- Verified environment: iPhone 11 · iOS 27.0 · certificate-signed build · LCSign · rootless DEB.
 - No IPA package is provided.
 - Localization currently includes English and Simplified Chinese only. Localization files for other languages have been removed from this repository for maintenance purposes.
 - Since this repository is based on EeveeSpotify-ng and EeveeSpotifyReincarnated, any enhanced features in this repository will not be detailed here. Those who need them can check EeveeSpotify-ng.
