@@ -77,34 +77,57 @@ enum InlineLyricsHostLocator {
 
     private static func lookup(from root: UIViewController) {
         guard NgzhwmSettingsViewModel.isWordByWordLyricsEnabled else { return }
-        guard let host = findHost(from: root) else {
+        guard let match = findHost(from: root) else {
             writeDebugLog("[WordByWord] inline host not found (9.1.x candidates absent)")
             return
         }
 
-        writeDebugLog("[WordByWord] inline host found: \(NSStringFromClass(type(of: host)))")
+        writeDebugLog(
+            "[WordByWord] inline host found: \(NSStringFromClass(type(of: match.contentView)))"
+            + " in \(NSStringFromClass(type(of: match.controller)))"
+        )
         onMainThreadSync {
-            WordByWordHost.shared.rememberInlineController(host)
-            WordByWordHost.shared.attach(to: host, showsTranslation: false)
+            // 关键：把**命中的歌词视图**作为 contentView 传进去，而不是上溯到的 VC。
+            //
+            // WordByWordHost.attach 在预览场景（showsProviderFooter == false）会执行
+            // `cardContainer(for: contentView)`，把 overlay 铺到「预览歌词卡片」上 ——
+            // 那才是「只有歌词那一块逐词、页面其余部分保持原生」的正确挂载点。
+            //
+            // 之前传的是上溯得到的 NPVScrollViewController，contentView 变成整页根视图，
+            // cardContainer 找不到卡片 → 退化成铺满整个正在播放页（就是之前那个现象）。
+            WordByWordHost.shared.rememberInlineController(match.controller)
+            WordByWordHost.shared.attach(
+                to: match.controller,
+                contentView: match.contentView,
+                showsTranslation: false
+            )
         }
     }
 
-    /// 先找 VC 候选（含子 VC 与 present 链），命中的视图候选则沿 responder 链上溯到所属 VC。
-    private static func findHost(from root: UIViewController) -> UIViewController? {
+    private struct HostMatch {
+        let controller: UIViewController
+        let contentView: UIView
+    }
+
+    /// 先找 VC 候选（含子 VC 与 present 链）；视图候选命中时返回**该视图本身**
+    /// 作为挂载内容视图，而不是它上溯到的 VC 根视图。
+    private static func findHost(from root: UIViewController) -> HostMatch? {
         var queue: [UIViewController] = [root]
         var visited = 0
         while !queue.isEmpty && visited < 64 {
             let vc = queue.removeFirst()
             visited += 1
-            if viewControllerCandidates.contains(NSStringFromClass(type(of: vc))) { return vc }
-            if let viaView = viewHost(in: vc.view) { return viaView }
+            if viewControllerCandidates.contains(NSStringFromClass(type(of: vc))) {
+                return HostMatch(controller: vc, contentView: vc.view)
+            }
+            if let match = viewHost(in: vc.view) { return match }
             queue.append(contentsOf: vc.children)
             if let presented = vc.presentedViewController { queue.append(presented) }
         }
         return nil
     }
 
-    private static func viewHost(in root: UIView?) -> UIViewController? {
+    private static func viewHost(in root: UIView?) -> HostMatch? {
         guard let root else { return nil }
         var queue: [UIView] = [root]
         var visited = 0
@@ -114,7 +137,9 @@ enum InlineLyricsHostLocator {
             if viewCandidates.contains(NSStringFromClass(type(of: view))) {
                 var responder: UIResponder? = view
                 while let current = responder {
-                    if let vc = current as? UIViewController { return vc }
+                    if let vc = current as? UIViewController {
+                        return HostMatch(controller: vc, contentView: view)
+                    }
                     responder = current.next
                 }
             }
