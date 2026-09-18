@@ -1168,7 +1168,11 @@ final class WordByWordHost {
 // 多拖一拍会让转场动画期间露出 Spotify 自己的全屏歌词（"进入时一闪"）。
 
 class LyricsWordByWordModernHostHook: ClassHook<UIViewController> {
-    typealias Group = ModernLyricsGroup
+    // `Lyrics_NPVCommunicatorImpl.LyricsOnlyViewController` 在 9.1.x 上不存在
+    // （真机日志 targetNotFound）→ 隔离组，永不激活。
+    // 影响：内嵌（NPV）逐词歌词在 9.1.x 上不可用；9.1.x 可用的宿主是
+    // LyricsWordByWordFullscreenModernHostHook 的 FullscreenElementViewController。
+    typealias Group = V91UnavailableLyricsGroup
     static let targetName = "Lyrics_NPVCommunicatorImpl.LyricsOnlyViewController"
 
     func viewDidAppear(_ animated: Bool) {

@@ -30,7 +30,9 @@ class SPTPlayerTrackHook: ClassHook<NSObject> {
 }
 
 class LyricsScrollProviderHook: ClassHook<NSObject> {
-    typealias Group = BaseLyricsGroup
+    // 9.1.x 上 `Lyrics_NPVCommunicatorImpl.ScrollProvider` 已不存在（真机日志 targetNotFound），
+    // 挪进永不激活的隔离组，避免注册期崩掉注入工具。
+    typealias Group = V91UnavailableLyricsGroup
     static var targetName = HookTargetNameHelper.lyricsScrollProvider
     
     func isEnabledForTrack(_ track: SPTPlayerTrack) -> Bool {
