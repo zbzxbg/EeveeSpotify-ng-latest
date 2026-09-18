@@ -2,7 +2,7 @@ import Orion
 import Intents
 
 class INMediaItemHook: ClassHook<INMediaItem> {
-    typealias Group = BasePremiumPatchingGroup
+    typealias Group = PremiumUIHooksGroup
     
     func identifier() -> String {
         var identifier = orig.identifier()
@@ -14,7 +14,6 @@ class INMediaItemHook: ClassHook<INMediaItem> {
                 
             if let feedbackDetails = json["feedback_details"] as? [String: Any],
                feedbackDetails["restriction"] as? String == "play-as-radio" {
-                writeDebugLog("[PREMIUM] Rewrote Siri play-as-radio command (removed :station)")
                 var context = json["context"] as! [String: Any]
                 
                 let urlString = context["url"] as! String

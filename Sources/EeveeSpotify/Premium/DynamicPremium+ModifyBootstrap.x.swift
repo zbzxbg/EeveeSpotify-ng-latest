@@ -9,6 +9,8 @@ private func showHavePremiumPopUp() {
 }
 
 class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDelegate {
+    // This hook is the *core* of premium patching (intercepts bootstrap and mutates UCS).
+    typealias Group = PremiumBootstrapGroup
     static var targetName: String {
         switch EeveeSpotify.hookTarget {
         case .lastAvailableiOS14: return "SPTCoreURLSessionDataDelegate"
@@ -38,7 +40,7 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
         }
         
         if url.isBootstrap {
-            URLSessionHelper.shared.setOrAppend(data, for: url)
+            URLSessionHelper.shared.setOrAppend(data, for: task)
             return
         }
 
@@ -58,11 +60,13 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
         }
         
         if error == nil && url.isBootstrap {
-            let buffer = URLSessionHelper.shared.obtainData(for: url)!
+            guard let buffer = URLSessionHelper.shared.obtainData(for: task) else {
+                orig.URLSession(session, task: task, didCompleteWithError: error)
+                return
+            }
             
             do {
                 var bootstrapMessage = try BootstrapMessage(serializedBytes: buffer)
-                writeDebugLog("[BOOTSTRAP] Fetched bootstrap response")
                 
                 if UserDefaults.patchType == .notSet {
                     if bootstrapMessage.attributes["type"]?.stringValue == "premium" {
@@ -71,13 +75,17 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
                     }
                     else {
                         UserDefaults.patchType = .requests
-                        activatePremiumPatchingGroup()
+                        // Dispatch to main thread — calling activate() (method swizzling) from
+                        // a URLSession delegate background thread while inside the method being
+                        // swizzled is not thread-safe and causes a first-launch crash.
+                        DispatchQueue.main.async { activatePremiumPatchingGroup() }
                     }
                     
-                    writeDebugLog("[BOOTSTRAP] patchType resolved to \(String(describing: UserDefaults.patchType))")
                 }
                 
                 if UserDefaults.patchType == .requests {
+                    writeDebugLog("[BOOTSTRAP] Patching bootstrap UCS response")
+                    UserDefaults.hasPatchedBootstrap = true
                     modifyRemoteConfiguration(&bootstrapMessage.ucsResponse)
                     
                     orig.URLSession(
@@ -85,10 +93,9 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
                         dataTask: task,
                         didReceiveData: try bootstrapMessage.serializedBytes()
                     )
-                    
-                    writeDebugLog("[BOOTSTRAP] Patched bootstrap UCS response")
                 }
                 else {
+                    writeDebugLog("[BOOTSTRAP] Passing through unmodified bootstrap (patchType=\(UserDefaults.patchType))")
                     orig.URLSession(session, dataTask: task, didReceiveData: buffer)
                 }
                 
@@ -96,7 +103,6 @@ class SpotifySessionDelegateBootstrapHook: ClassHook<NSObject>, SpotifySessionDe
                 return
             }
             catch {
-                writeDebugLog("[BOOTSTRAP] Unable to modify bootstrap data: \(error)")
             }
         }
         

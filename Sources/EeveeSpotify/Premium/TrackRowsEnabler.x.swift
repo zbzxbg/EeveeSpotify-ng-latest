@@ -1,8 +1,11 @@
 import Orion
 
 class SPTFreeTierArtistHubRemoteURLResolverHook: ClassHook<NSObject> {
-    typealias Group = IOS14And15PremiumPatchingGroup
-    static let targetName = "SPTFreeTierArtistHubRemoteURLResolver"
+    typealias Group = V91PremiumPatchingGroup
+    
+    static var targetName: String {
+        return EeveeSpotify.hookTarget == .v91 ? "UIView" : "SPTFreeTierArtistHubRemoteURLResolver"
+    }
     
     func initWithViewURI(
         _ uri: NSURL,
@@ -11,7 +14,6 @@ class SPTFreeTierArtistHubRemoteURLResolverHook: ClassHook<NSObject> {
         trackRowsEnabled: Bool,
         productState: NSObject
     ) -> Target {
-        writeDebugLog("[PREMIUM] Enabling track rows (forced trackRowsEnabled=true)")
         return orig.initWithViewURI(
             uri,
             onDemandSet: onDemandSet,

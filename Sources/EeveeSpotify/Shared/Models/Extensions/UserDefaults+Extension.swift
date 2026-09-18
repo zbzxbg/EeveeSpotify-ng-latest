@@ -6,10 +6,14 @@ extension UserDefaults {
     private static let musixmatchTokenKey = "musixmatchToken"
     private static let darkPopUpsKey = "darkPopUps"
     private static let patchTypeKey = "patchType"
+    private static let trueShuffleEnabledKey = "trueShuffleEnabled"
     private static let overwriteConfigurationKey = "overwriteConfiguration"
     private static let lyricsColorsKey = "lyricsColors"
     private static let lyricsOptionsKey = "lyricsOptions"
     private static let hasShownCommonIssuesTipKey = "hasShownCommonIssuesTip"
+    private static let hasPatchedBootstrapKey = "eeveeHasPatchedBootstrap"
+    private static let iconNamePrettifyKey = "iconNamePrettify"
+    private static let cleanShareLinksKey = "cleanShareLinks"
     private static let enableLogRecordingKey = "enableLogRecording"
 
     static var musixmatchToken: String {
@@ -36,10 +40,21 @@ extension UserDefaults {
                 return EeveePatchType(rawValue: rawValue) ?? .requests
             }
 
-            return .notSet
+            // If the key is missing (fresh install / "reset data"), default to patching.
+            // This avoids users silently falling back to Free tier.
+            return .requests
         }
         set (patchType) {
             container.set(patchType.rawValue, forKey: patchTypeKey)
+        }
+    }
+
+    static var trueShuffleEnabled: Bool {
+        get {
+            container.object(forKey: trueShuffleEnabledKey) as? Bool ?? false
+        }
+        set (isEnabled) {
+            container.set(isEnabled, forKey: trueShuffleEnabledKey)
         }
     }
     
@@ -52,6 +67,11 @@ extension UserDefaults {
         }
     }
     
+    static var hasPatchedBootstrap: Bool {
+        get { container.bool(forKey: hasPatchedBootstrapKey) }
+        set { container.set(newValue, forKey: hasPatchedBootstrapKey) }
+    }
+
     static var hasShownCommonIssuesTip: Bool {
         get {
             container.bool(forKey: hasShownCommonIssuesTipKey)
@@ -61,7 +81,29 @@ extension UserDefaults {
         }
     }
 
-    /// When true, EeveeSpotify logs content at the debug level.
+    /// When true, icon names are prettified: underscores/hyphens become spaces,
+    /// camelCase boundaries and numbers get spaces, and parentheses get a leading space.
+    static var iconNamePrettify: Bool {
+        get {
+            container.object(forKey: iconNamePrettifyKey) as? Bool ?? true
+        }
+        set {
+            container.set(newValue, forKey: iconNamePrettifyKey)
+        }
+    }
+
+    /// When true, the `si` tracking parameter is stripped from shared Spotify links.
+    static var cleanShareLinks: Bool {
+        get {
+            container.object(forKey: cleanShareLinksKey) as? Bool ?? false
+        }
+        set (cleanShareLinks) {
+            container.set(cleanShareLinks, forKey: cleanShareLinksKey)
+        }
+    }
+
+    /// When true, EeveeSpotify logs content at the debug level and mirrors it into the
+    /// exportable eeveespotify_debug.log (ng / Reborn-ng behaviour).
     static var enableLogRecording: Bool {
         get {
             container.bool(forKey: enableLogRecordingKey)

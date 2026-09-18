@@ -6,7 +6,7 @@ private let likedTracksRow: [String: Any] = [
 ]
 
 class HUBViewModelBuilderImplementationHook: ClassHook<NSObject> {
-    typealias Group = BasePremiumPatchingGroup
+    typealias Group = PremiumUIHooksGroup
     static let targetName: String = "HUBViewModelBuilderImplementation"
     
     func addJSONDictionary(_ dictionary: NSDictionary?) {
@@ -24,15 +24,14 @@ class HUBViewModelBuilderImplementationHook: ClassHook<NSObject> {
                 return
             }
             
-            var didInject = false
             if let index = components.firstIndex(
                 where: { $0["id"] as? String == "artist-entity-view-artist-tab-container" }
             ) {
                 if var childrenArray = components[index]["children"] as? [[String: Any]],
+                   !childrenArray.isEmpty,
                    var innerChildrenArray = childrenArray[0]["children"] as? [Any] {
                     
                     innerChildrenArray.insert(likedTracksRow, at: 0)
-                    didInject = true
                     
                     childrenArray[0]["children"] = innerChildrenArray
                     components[index]["children"] = childrenArray
@@ -42,11 +41,6 @@ class HUBViewModelBuilderImplementationHook: ClassHook<NSObject> {
                 where: { $0["id"] as? String == "artist-entity-view-top-tracks-combined" }
             ) {
                 components.insert(likedTracksRow, at: index)
-                didInject = true
-            }
-            
-            if didInject {
-                writeDebugLog("[PREMIUM] Added liked songs row to artist view")
             }
             
             mutableDictionary["body"] = components

@@ -1,143 +1,140 @@
 import Foundation
 import Orion
 
-// MARK: - Spotify Bearer token 捕获
-//
-// 从 Spotify 出站请求里捕获 Bearer token，供 SpicyLyrics 等歌词源复用
-// （api.spicylyrics.org 需要 Spotify 自身的 token 才返回歌词）。
-// URLSession 回调和歌词仓库跑在不同队列，token 必须用锁保护的存储，
-// 不能直接读写无保护的 Swift 全局 String。
-private final class SpotifyAccessTokenStore {
-    static let shared = SpotifyAccessTokenStore()
+// Bearer token captured from premium-relevant requests; reused by lyrics fetch etc.
+public var spotifyAccessToken: String?
 
-    private let lock = NSLock()
-    private var value: String?
-
-    func set(_ token: String?) {
-        lock.lock()
-        value = token
-        lock.unlock()
-    }
-
-    func snapshot() -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-}
+// ng（Reborn-ng）歌词仓库（SpicyLyrics 等）通过下面这两个访问器读写 token。
+// URLSession 回调与歌词仓库跑在不同队列上，直接读写无保护的全局 String 有数据竞争，
+// 这里用锁串行化；`spotifyAccessToken` 变量本身保留，兼容既有读取点。
+private let spotifyAccessTokenLock = NSLock()
 
 func setSpotifyAccessToken(_ token: String?) {
-    SpotifyAccessTokenStore.shared.set(token)
+    spotifyAccessTokenLock.lock()
+    spotifyAccessToken = token
+    spotifyAccessTokenLock.unlock()
 }
 
 func spotifyAccessTokenSnapshot() -> String? {
-    SpotifyAccessTokenStore.shared.snapshot()
+    spotifyAccessTokenLock.lock()
+    defer { spotifyAccessTokenLock.unlock() }
+    return spotifyAccessToken
 }
 
-// MARK: - 线程安全的拦截上下文（按 taskIdentifier 隔离）
-final class InterceptionContext {
-    static let shared = InterceptionContext()
-
-    private let lock = NSLock()
-    private var stateByTaskID: [Int: State] = [:]
-    private var dataByTaskID: [Int: Data] = [:]
-    private var customDataByTaskID: [Int: Data] = [:]
-    private var pendingResponseByTaskID: [Int: HTTPURLResponse] = [:]
-
-    enum State {
-        case buffering              // 普通修改：缓冲真实数据，完成时替换
-        case replacingResponse      // 歌词非200：伪造200响应，忽略真实数据/错误
-    }
-
-    func setState(_ state: State, for task: URLSessionDataTask) {
-        lock.lock()
-        defer { lock.unlock() }
-        stateByTaskID[task.taskIdentifier] = state
-    }
-
-    func getState(for task: URLSessionDataTask) -> State? {
-        lock.lock()
-        defer { lock.unlock() }
-        return stateByTaskID[task.taskIdentifier]
-    }
-
-    func appendData(_ data: Data, for task: URLSessionDataTask) {
-        lock.lock()
-        defer { lock.unlock() }
-        let id = task.taskIdentifier
-        if var existing = dataByTaskID[id] {
-            existing.append(data)
-            dataByTaskID[id] = existing
-        } else {
-            dataByTaskID[id] = data
-        }
-    }
-
-    func getData(for task: URLSessionDataTask) -> Data? {
-        lock.lock()
-        defer { lock.unlock() }
-        return dataByTaskID[task.taskIdentifier]
-    }
-
-    func setCustomData(_ data: Data, for task: URLSessionDataTask) {
-        lock.lock()
-        defer { lock.unlock() }
-        customDataByTaskID[task.taskIdentifier] = data
-    }
-
-    func getCustomData(for task: URLSessionDataTask) -> Data? {
-        lock.lock()
-        defer { lock.unlock() }
-        return customDataByTaskID[task.taskIdentifier]
-    }
-
-    func setPendingResponse(_ response: HTTPURLResponse, for task: URLSessionDataTask) {
-        lock.lock()
-        defer { lock.unlock() }
-        pendingResponseByTaskID[task.taskIdentifier] = response
-    }
-
-    func getPendingResponse(for task: URLSessionDataTask) -> HTTPURLResponse? {
-        lock.lock()
-        defer { lock.unlock() }
-        return pendingResponseByTaskID[task.taskIdentifier]
-    }
-
-    func removeAll(for task: URLSessionDataTask) {
-        lock.lock()
-        defer { lock.unlock() }
-        let id = task.taskIdentifier
-        stateByTaskID.removeValue(forKey: id)
-        dataByTaskID.removeValue(forKey: id)
-        customDataByTaskID.removeValue(forKey: id)
-        pendingResponseByTaskID.removeValue(forKey: id)
-    }
-}
+// Spotify's primary URLSession delegate (wg-spclient: bootstrap, customize, PAM).
+// Patching lives in SpotifyResponsePatcher so HttpClientURLSessionHook can share it.
 
 class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
+    typealias Group = PremiumBootstrapGroup
     static let targetName = "SPTDataLoaderService"
 
-    // orion:new
-    func shouldModify(_ url: URL) -> Bool {
-        let shouldPatchPremium = BasePremiumPatchingGroup.isActive
-        let shouldReplaceLyrics = BaseLyricsGroup.isActive
-
-        return (shouldReplaceLyrics && url.isLyrics)
-            || (shouldPatchPremium && (url.isCustomize || url.isPremiumPlanRow || url.isPremiumBadge || url.isPlanOverview))
-    }
-
-    // MARK: - 辅助方法：发送数据 + 完成
-    private func sendDataAndComplete(
-        _ data: Data,
+    func URLSession(
+        _ session: URLSession,
         task: URLSessionDataTask,
-        session: URLSession,
-        error: Error? = nil
+        didCompleteWithError error: Error?
     ) {
-        orig.URLSession(session, dataTask: task, didReceiveData: data)
-        orig.URLSession(session, task: task, didCompleteWithError: error)
-    }
+        if let request = task.currentRequest,
+           let headers = request.allHTTPHeaderFields,
+           let auth = headers["Authorization"] ?? headers["authorization"],
+           auth.hasPrefix("Bearer ") {
+            let token = String(auth.dropFirst(7))
+            setSpotifyAccessToken(token)
+            // TEMP DEBUG: log token shape + source URL, never the token itself.
+            let dotCount = token.filter { $0 == "." }.count
+            let shape = "len=\(token.count) dots=\(dotCount) prefix=\(token.prefix(6))"
+            writeDebugLog("[TokenCapture] \(shape) from \(task.currentRequest?.url?.absoluteString ?? "<no url>")")
+        }
 
-    // MARK: - URLSessionDataDelegate
+        guard let url = task.currentRequest?.url else {
+            orig.URLSession(session, task: task, didCompleteWithError: error)
+            return
+        }
+
+        if CasitaResponseProbe.shouldProbe(url) {
+            CasitaResponseProbe.flush(task, url: url)
+        }
+
+        if SpotifyResponsePatcher.shouldBlock(url) {
+            orig.URLSession(session, dataTask: task, didReceiveData: SpotifyResponsePatcher.blockedResponseData(for: url))
+            orig.URLSession(session, task: task, didCompleteWithError: nil)
+            return
+        }
+
+        // 304 already served — suppress the second completion.
+        if SpotifyResponsePatcher.consumeCustomizeTask(task.taskIdentifier) {
+            orig.URLSession(session, task: task, didCompleteWithError: nil)
+            return
+        }
+
+        guard error == nil, SpotifyResponsePatcher.shouldModify(url) else {
+            orig.URLSession(session, task: task, didCompleteWithError: error)
+            return
+        }
+
+        guard let buffer = URLSessionHelper.shared.obtainData(for: task) else {
+            // Customize 304 fallback — wg-spclient returned 304, no buffer
+            // to patch, but we have a cached body from a prior 200.
+            if url.isCustomize, let cached = SpotifyResponsePatcher.cachedCustomizeData {
+                orig.URLSession(session, dataTask: task, didReceiveData: cached)
+                orig.URLSession(session, task: task, didCompleteWithError: nil)
+            } else {
+                // Some Spotify builds complete "modified" tasks with 0 body bytes.
+                // Forwarding completion only can crash consumers that assume at least
+                // one didReceiveData callback before completion.
+                writeDebugLog("[DL] Missing buffered body for \(url.absoluteString) (taskId=\(task.taskIdentifier))")
+                orig.URLSession(session, dataTask: task, didReceiveData: Data())
+                // Always forward completion; otherwise Spotify may hang and get watchdog-killed.
+                orig.URLSession(session, task: task, didCompleteWithError: error)
+            }
+            return
+        }
+
+        do {
+            // Lyrics — async fetch with 18s budget, falls back to Spotify's own response on failure.
+            //
+            // iOS 27 / Spotify 9.1.60 fix: Spotify's URLSession delegate handler for
+            // didReceiveData now accesses @MainActor-isolated state. When we call orig.*
+            // from the SPTDataLoaderService delegate queue (a background serial queue),
+            // Swift's strict concurrency runtime trips _swift_task_checkIsolatedSwift and
+            // kills the process with EXC_BREAKPOINT / SIGTRAP.
+            //
+            // Fix: dispatch the two orig.URLSession calls onto the main queue.
+            // This matches the execution context Spotify's renderer expects and eliminates
+            // the @MainActor isolation violation entirely.
+            if url.isLyrics {
+                let originalLyrics = try? Lyrics(serializedBytes: buffer)
+
+                let semaphore = DispatchSemaphore(value: 0)
+                var customLyricsData: Data?
+
+                DispatchQueue.global(qos: .userInitiated).async {
+                    customLyricsData = try? getLyricsDataForCurrentTrack(url.path, originalLyrics: originalLyrics)
+                    semaphore.signal()
+                }
+
+                _ = semaphore.wait(timeout: .now() + .milliseconds(18000))
+                let lyricsPayload = customLyricsData ?? buffer
+                DispatchQueue.main.async { [self] in
+                    orig.URLSession(session, dataTask: task, didReceiveData: lyricsPayload)
+                    orig.URLSession(session, task: task, didCompleteWithError: nil)
+                }
+                return
+            }
+
+            if let result = try SpotifyResponsePatcher.patch(url: url, buffer: buffer) {
+                writeDebugLog("[DL] Patched \(result.tag.rawValue)")
+                orig.URLSession(session, dataTask: task, didReceiveData: result.data)
+                orig.URLSession(session, task: task, didCompleteWithError: nil)
+                return
+            }
+            // patch() returned nil but didReceiveData already suppressed the original —
+            // replay the buffer or the consumer hangs (casita/browsita with no ad sections).
+            orig.URLSession(session, dataTask: task, didReceiveData: buffer)
+            orig.URLSession(session, task: task, didCompleteWithError: nil)
+        } catch {
+            orig.URLSession(session, task: task, didCompleteWithError: error)
+        }
+    }
 
     func URLSession(
         _ session: URLSession,
@@ -145,69 +142,51 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         didReceiveResponse response: HTTPURLResponse,
         completionHandler handler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
-        guard let url = task.currentRequest?.url else {
-            orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
-            return
-        }
-
-        if url.isLyrics && NgzhwmSettingsViewModel.isLyricsFeatureDisabled {
-            handler(.cancel)
-            return
-        }
-
-        guard shouldModify(url) else {
-            orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
-            return
-        }
-
-        // 1. 歌词请求且状态码非200：伪造200响应
-        if url.isLyrics && response.statusCode != 200 {
-            writeDebugLog("[DL] Lyrics request non-200 (\(response.statusCode)) — replacing")
-            do {
-                let customData = try getLyricsDataForCurrentTrack(url.path)
-
-                // 构造200响应，尽量保留原有header和httpVersion
-                let headerFields = response.allHeaderFields as? [String: String] ?? [:]
-                let okResponse = HTTPURLResponse(
-                    url: url,
-                    statusCode: 200,
-                    httpVersion: "HTTP/1.1",
-                    headerFields: headerFields
-                ) ?? HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
-
-                // 标记任务为“替换响应”，并缓存自定义数据
-                InterceptionContext.shared.setState(.replacingResponse, for: task)
-                InterceptionContext.shared.setCustomData(customData, for: task)
-
-                // 允许系统继续接收数据（真实错误数据会被我们在 didReceiveData 中忽略）
-                orig.URLSession(session, dataTask: task, didReceiveResponse: okResponse, completionHandler: handler)
-                return
-            } catch let caughtError {
-                writeErrorLog("[DL] Custom lyrics failed in didReceiveResponse: \(caughtError)")
-                // 自定义歌词失败时透传原始响应，让官方错误流程处理，不再伪造空歌词。
+        if let url = task.currentRequest?.url, url.isCustomize, response.statusCode == 304,
+           let cached = SpotifyResponsePatcher.cachedCustomizeData {
+            // 304, but our cache holds the already-patched body; force 200 so the
+            // consumer accepts the cached data we replay next.
+            guard let synthetic = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: [:]) else {
                 orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
                 return
             }
+            orig.URLSession(session, dataTask: task, didReceiveResponse: synthetic, completionHandler: handler)
+            orig.URLSession(session, dataTask: task, didReceiveData: cached)
+            SpotifyResponsePatcher.markCustomizeTaskHandled(task.taskIdentifier)
+            return
         }
 
-        // 2. 其他需要修改的请求：仅当原始响应成功（2xx）时才拦截
-        guard (200..<300).contains(response.statusCode) else {
+        // Lyrics 4xx/5xx — replace with our custom fetch result so the
+        // consumer doesn't show "no lyrics available".
+        //
+        // IMPORTANT: getLyricsDataForCurrentTrack is a blocking network call.
+        // Calling it synchronously here deadlocks because this delegate queue is
+        // also needed to deliver subsequent delegate callbacks (didReceiveData,
+        // didCompleteWithError). The fix is to fetch on a background queue while
+        // holding the URLSession completion handler open — URLSession won't
+        // proceed until we call handler(.allow/.cancel), so we have time to fetch
+        // and then deliver everything ourselves.
+        guard let url = task.currentRequest?.url, url.isLyrics, response.statusCode != 200 else {
             orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
             return
         }
 
-        // 标记为缓冲模式，后续数据将被缓冲，完成时替换。
-        // 歌词响应暂不立即交给 Spotify；否则后续 Genius noSuchSong
-        // 即使抛错，Spotify 已经收到 2xx 响应，也只会显示空歌词。
-        InterceptionContext.shared.setState(.buffering, for: task)
-        if url.isLyrics {
-            writeDebugLog("[DL] Buffering lyrics response (status \(response.statusCode))")
-            InterceptionContext.shared.setPendingResponse(response, for: task)
-            // 允许网络继续传输；响应本身会在 didCompleteWithError 中
-            // 根据自定义歌词结果再交给 Spotify 的原始处理器。
-            handler(.allow)
-        } else {
-            orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let data = try? getLyricsDataForCurrentTrack(url.path)
+
+            guard let lyricsData = data,
+                  let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: [:]) else {
+                // Fetch failed — let Spotify handle the original non-200 response.
+                handler(.allow)
+                orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: { _ in })
+                return
+            }
+
+            DispatchQueue.main.async { [self] in
+                orig.URLSession(session, dataTask: task, didReceiveResponse: ok, completionHandler: handler)
+                orig.URLSession(session, dataTask: task, didReceiveData: lyricsData)
+                orig.URLSession(session, task: task, didCompleteWithError: nil)
+            }
         }
     }
 
@@ -216,169 +195,18 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         dataTask task: URLSessionDataTask,
         didReceiveData data: Data
     ) {
-        guard let url = task.currentRequest?.url else {
-            orig.URLSession(session, dataTask: task, didReceiveData: data)
+        guard let url = task.currentRequest?.url else { return }
+
+        // Suppress original data for endpoints we'll replace in
+        // didCompleteWithError — otherwise the consumer sees both.
+        if SpotifyResponsePatcher.shouldBlock(url) { return }
+        if CasitaResponseProbe.shouldProbe(url) {
+            CasitaResponseProbe.append(data, for: task)
+        }
+        if SpotifyResponsePatcher.shouldModify(url) {
+            URLSessionHelper.shared.setOrAppend(data, for: task)
             return
         }
-
-        guard let state = InterceptionContext.shared.getState(for: task) else {
-            orig.URLSession(session, dataTask: task, didReceiveData: data)
-            return
-        }
-
-        switch state {
-        case .replacingResponse:
-            // 忽略伪造响应后的真实错误数据
-            break
-
-        case .buffering:
-            // 缓冲数据，暂不转发给上层
-            InterceptionContext.shared.appendData(data, for: task)
-            break
-        }
-    }
-
-    func URLSession(
-        _ session: URLSession,
-        task: URLSessionDataTask,
-        didCompleteWithError error: Error?
-    ) {
-        // 任何携带 Bearer token 的 Spotify 请求都顺手记录最新 token，
-        // 供 SpicyLyrics 歌词请求复用（先于一切 guard，保证所有任务都过一遍）。
-        if let request = task.currentRequest,
-           let headers = request.allHTTPHeaderFields,
-           let auth = headers["Authorization"] ?? headers["authorization"],
-           auth.hasPrefix("Bearer ") {
-            setSpotifyAccessToken(String(auth.dropFirst(7)))
-            writeDebugLog("[TokenCapture] Bearer token from \(task.currentRequest?.url?.absoluteString ?? "?")")
-        }
-
-        guard let url = task.currentRequest?.url else {
-            orig.URLSession(session, task: task, didCompleteWithError: error)
-            return
-        }
-
-        guard let state = InterceptionContext.shared.getState(for: task) else {
-            orig.URLSession(session, task: task, didCompleteWithError: error)
-            return
-        }
-
-        // 确保无论如何都清理任务状态与数据
-        defer {
-            InterceptionContext.shared.removeAll(for: task)
-        }
-
-        switch state {
-        case .replacingResponse:
-            // 使用缓存的自定义歌词数据；缓存丢失时将错误交给官方流程。
-            if let cached = InterceptionContext.shared.getCustomData(for: task) {
-                writeDebugLog("[DL] Custom lyrics accepted (non-200 fallback)")
-                sendDataAndComplete(cached, task: task, session: session, error: nil)
-            } else {
-                do {
-                    let data = try getLyricsDataForCurrentTrack(url.path)
-                    sendDataAndComplete(data, task: task, session: session, error: nil)
-                } catch let caughtError {
-                    writeErrorLog("[DL] Custom lyrics failed (non-200 fallback): \(caughtError)")
-                    orig.URLSession(session, task: task, didCompleteWithError: error)
-                }
-            }
-
-        case .buffering:
-            let pendingResponse = InterceptionContext.shared.getPendingResponse(for: task)
-
-            guard error == nil else {
-                // 原始请求失败时，先恢复被暂存的响应，再透传网络错误。
-                if let pendingResponse {
-                    orig.URLSession(
-                        session,
-                        dataTask: task,
-                        didReceiveResponse: pendingResponse,
-                        completionHandler: { _ in }
-                    )
-                }
-                orig.URLSession(session, task: task, didCompleteWithError: error)
-                return
-            }
-
-            guard let buffer = InterceptionContext.shared.getData(for: task) else {
-                // 没有缓冲到数据（极端情况），恢复原始响应并完成请求。
-                if let pendingResponse {
-                    orig.URLSession(
-                        session,
-                        dataTask: task,
-                        didReceiveResponse: pendingResponse,
-                        completionHandler: { _ in }
-                    )
-                }
-                orig.URLSession(session, task: task, didCompleteWithError: nil)
-                return
-            }
-
-            do {
-                if url.isLyrics {
-                    let customData = try getLyricsDataForCurrentTrack(
-                        url.path,
-                        originalLyrics: try? Lyrics(serializedBytes: buffer)
-                    )
-                    writeDebugLog("[DL] Custom lyrics accepted")
-                    if let pendingResponse {
-                        orig.URLSession(
-                            session,
-                            dataTask: task,
-                            didReceiveResponse: pendingResponse,
-                            completionHandler: { _ in }
-                        )
-                    }
-                    sendDataAndComplete(customData, task: task, session: session, error: nil)
-                } else if url.isPremiumPlanRow {
-                    writeDebugLog("[DL] Patching premium plan row")
-                    let customData = try getPremiumPlanRowData(
-                        originalPremiumPlanRow: try PremiumPlanRow(serializedBytes: buffer)
-                    )
-                    sendDataAndComplete(customData, task: task, session: session, error: nil)
-                } else if url.isPremiumBadge {
-                    writeDebugLog("[DL] Patching premium badge")
-                    let customData = try getPremiumPlanBadge()
-                    sendDataAndComplete(customData, task: task, session: session, error: nil)
-                } else if url.isCustomize {
-                    writeDebugLog("[DL] Patching customize response")
-                    var customizeMessage = try CustomizeMessage(serializedBytes: buffer)
-                    modifyRemoteConfiguration(&customizeMessage.response)
-                    let customData = try customizeMessage.serializedData()
-                    sendDataAndComplete(customData, task: task, session: session, error: nil)
-                } else if url.isPlanOverview {
-                    writeDebugLog("[DL] Patching plan overview")
-                    let customData = try getPlanOverviewData()
-                    sendDataAndComplete(customData, task: task, session: session, error: nil)
-                } else {
-                    // 理论上不会发生，回退原始数据
-                    sendDataAndComplete(buffer, task: task, session: session, error: nil)
-                }
-            } catch let caughtError {
-                writeErrorLog("[DL] Buffered lyrics replacement failed: \(caughtError)")
-                if url.isLyrics, let pendingResponse {
-                    // 自定义歌词失败时返回 HTTP 错误响应。此时 Spotify 尚未收到
-                    // 原始 2xx 响应，才能进入原有的黑色“无歌词”错误界面。
-                    let errorResponse = HTTPURLResponse(
-                        url: pendingResponse.url ?? url,
-                        statusCode: 500,
-                        httpVersion: "HTTP/1.1",
-                        headerFields: pendingResponse.allHeaderFields as? [String: String]
-                    ) ?? pendingResponse
-                    orig.URLSession(
-                        session,
-                        dataTask: task,
-                        didReceiveResponse: errorResponse,
-                        completionHandler: { _ in }
-                    )
-                    orig.URLSession(session, task: task, didCompleteWithError: nil)
-                } else if url.isLyrics {
-                    orig.URLSession(session, task: task, didCompleteWithError: error)
-                } else {
-                    sendDataAndComplete(buffer, task: task, session: session, error: nil)
-                }
-            }
-        }
+        orig.URLSession(session, dataTask: task, didReceiveData: data)
     }
 }

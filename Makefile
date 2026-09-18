@@ -6,23 +6,44 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = EeveeSpotify
 
+REPO_SLUG ?= $(shell git remote get-url origin 2>/dev/null | sed -E 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$$|\1|')
+REPO_SLUG_FINAL := $(if $(REPO_SLUG),$(REPO_SLUG),jaydenjcpy/EeveeSpotifyReincarnated)
+
+BRANCH_NAME ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+BRANCH_NAME_FINAL := $(if $(BRANCH_NAME),$(BRANCH_NAME),Master)
+
+$(shell mkdir -p Sources/EeveeSpotify/Generated)
+$(shell printf 'enum GeneratedConfig {\n    static let repoSlug = "%s"\n    static let branchName = "%s"\n}\n' "$(REPO_SLUG_FINAL)" "$(BRANCH_NAME_FINAL)" > Sources/EeveeSpotify/Generated/RepoSlug.swift)
+
 EeveeSpotify_FILES = $(shell find Sources/EeveeSpotify -name '*.swift') $(shell find Sources/EeveeSpotifyC -name '*.m' -o -name '*.c' -o -name '*.mm' -o -name '*.cpp')
 EeveeSpotify_SWIFTFLAGS = -ISources/EeveeSpotifyC/include -Osize
-EeveeSpotify_EXTRA_FRAMEWORKS = SwiftProtobuf
+EeveeSpotify_EXTRA_FRAMEWORKS = EeveeSwiftProtobuf
 EeveeSpotify_CFLAGS = -fobjc-arc -ISources/EeveeSpotifyC/include -Os
+
+# RootHide's compatibility implementation of libroot resolves jailbreak paths
+# through libroothide at runtime. Rootless builds continue to use libroot.
+ifeq ($(THEOS_PACKAGE_SCHEME),roothide)
+EeveeSpotify_SWIFTFLAGS += -D ROOTHIDE
+EeveeSpotify_LDFLAGS += -lroothide -Xlinker -rpath -Xlinker @loader_path/.jbroot/Library/Frameworks
+else
+EeveeSpotify_LDFLAGS += -lroot
+endif
+
+# Sideload compatibility (keychain redirect, group containers, CloudKit) is
+# handled out-of-process by modules/zxPluginsInject — LC-injected via ipapatch
+# in build-ipa-local.sh and the GitHub workflow. No flags needed here.
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-# ⚠️ 已弃用：这里下载的 whoeevee 预编译 deb 是用 Swift 6.0.3 生成的 .swiftmodule，
-# 而 Swift 二进制模块不跨编译器版本兼容 —— Xcode 26.x（Swift 6.3.x）下会直接报
-# "module compiled with Swift 6.0.3 cannot be imported"。该上游仓库已归档。
-#
-# 现在请改用源码编译脚本（CI 也是走它）：
-#   ./Tools/SwiftProtobufBuild/build-swiftprotobuf.sh
-#   THEOS_PACKAGE_SCHEME=rootless ./Tools/SwiftProtobufBuild/build-swiftprotobuf.sh
-copy-swiftprotobuf:
-	mkdir -p swiftprotobuf && cd swiftprotobuf ;\
-	curl -OL https://github.com/whoeevee/EeveeSpotify/releases/download/swift2.0/org.swift.protobuf.swiftprotobuf_1.26.0_iphoneos-arm.deb ;\
-	ar -x org.swift.protobuf.swiftprotobuf_1.26.0_iphoneos-arm.deb ;\
-	tar -xvf data.tar.lzma ;\
-	cp -r Library/Frameworks/SwiftProtobuf.framework "${THEOS}/lib" ;\
+internal-stage::
+	# Bundle EeveeSwiftProtobuf.framework into the package. Renamed from
+	# SwiftProtobuf so the @objc class names don't collide with the
+	# SwiftProtobuf statically embedded in SpotifyShared.framework.
+	mkdir -p $(THEOS_STAGING_DIR)/Library/Frameworks
+	cp -r $(THEOS)/lib/iphone/$(or $(THEOS_PACKAGE_SCHEME),rootless)/EeveeSwiftProtobuf.framework $(THEOS_STAGING_DIR)/Library/Frameworks/
+
+# Build EeveeSwiftProtobuf.framework from apple/swift-protobuf source. Run
+# this once before `make package`. Re-run if SWIFTPROTOBUF_VERSION changes
+# or `swift --version` jumps a major.
+build-eeveeswiftprotobuf:
+	Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh

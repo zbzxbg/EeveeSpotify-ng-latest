@@ -1,7 +1,6 @@
 import Foundation
 
 func getPremiumPlanBadge() throws -> Data {
-    writeDebugLog("[PREMIUM] Serving premium plan badge")
     let badge = YourPremiumBadge.with {
         $0.name = "Eevee"
         $0.version = 2
@@ -12,7 +11,6 @@ func getPremiumPlanBadge() throws -> Data {
 }
 
 func getPremiumPlanRowData(originalPremiumPlanRow: PremiumPlanRow) throws -> Data {
-    writeDebugLog("[PREMIUM] Serving premium plan row")
     var premiumPlanRow = originalPremiumPlanRow
     
     premiumPlanRow.planName = "EeveeSpotify"
@@ -23,7 +21,6 @@ func getPremiumPlanRowData(originalPremiumPlanRow: PremiumPlanRow) throws -> Dat
 }
 
 func getPlanOverviewData() throws -> Data {
-    writeDebugLog("[PREMIUM] Serving plan overview")
     let plan = SpotifyPlan.with {
         $0.notice = SpotifyPlan.Notice.with {
             $0.message = "payment_notice".localized

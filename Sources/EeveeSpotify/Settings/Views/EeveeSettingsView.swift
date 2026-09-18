@@ -7,7 +7,23 @@ struct EeveeSettingsView: View {
     
     @State private var hasShownCommonIssuesTip = UserDefaults.hasShownCommonIssuesTip
     @State private var isClearingData = false
-    
+    @State private var isPresentingDevNoteSheet = false
+
+
+    private func confirmDestructive(
+        title: String,
+        message: String,
+        confirmTitle: String,
+        onConfirm: @escaping () -> Void
+    ) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel".uiKitLocalized, style: .cancel))
+        alert.addAction(UIAlertAction(title: confirmTitle, style: .destructive) { _ in
+            onConfirm()
+        })
+        WindowHelper.shared.present(alert)
+    }
+
     private func pushSettingsController(with view: any View, title: String) {
         let viewController = EeveeSettingsViewController(
             navigationController.view.frame,
@@ -88,7 +104,62 @@ struct EeveeSettingsView: View {
                     imageSystemName: "sparkle"
                 )
             }
-            
+
+            Button {
+                pushSettingsController(
+                    with: SponsorBlockSettingsView(),
+                    title: "sponsorblock".localized
+                )
+            } label: {
+                NavigationSectionView(
+                    color: .red,
+                    title: "sponsorblock".localized,
+                    imageSystemName: "forward.end.fill"
+                )
+            }
+
+            Button {
+                pushSettingsController(
+                    with: EeveeAppIconPickerView(),
+                    title: "appIcon".localized
+                )
+            } label: {
+                NavigationSectionView(
+                    color: .pink,
+                    title: "appIcon".localized,
+                    imageSystemName: "app.badge.fill"
+                )
+            }
+
+            Button {
+                pushSettingsController(
+                    with: EeveeMiscellaneousSettingsView(),
+                    title: "miscellaneous".localized
+                )
+            } label: {
+                NavigationSectionView(
+                    color: .gray,
+                    title: "miscellaneous".localized,
+                    imageSystemName: "ellipsis.circle.fill"
+                )
+            }
+
+            //
+
+            Section {
+                Button {
+                    isPresentingDevNoteSheet = true
+                } label: {
+                    HStack {
+                        Image(systemName: "person.fill.questionmark")
+                        Text("\("developer_note".localized)...")
+                    }
+                }
+            }
+            .sheet(isPresented: $isPresentingDevNoteSheet) {
+                EeveeDevNoteView()
+            }
+
             Section(header: Text("debug_title".localized), footer: Text("enable_log_recording_description".localized)) {
                 Toggle(
                     "enable_log_recording".localized,
@@ -152,13 +223,19 @@ struct EeveeSettingsView: View {
             
             Section(footer: Text("reset_data_description".localized)) {
                 Button {
-                    isClearingData = true
-                    
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        OfflineHelper.resetData(clearCaches: true)
-                        
-                        DispatchQueue.main.async {
-                            exitApplication()
+                    confirmDestructive(
+                        title: "reset_data".localized,
+                        message: "reset_data_description".localized,
+                        confirmTitle: "reset_data".localized
+                    ) {
+                        isClearingData = true
+
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            OfflineHelper.resetData(clearCaches: true)
+
+                            DispatchQueue.main.async {
+                                exitApplication()
+                            }
                         }
                     }
                 } label: {
@@ -170,18 +247,43 @@ struct EeveeSettingsView: View {
                     }
                 }
             }
-            // 底部留白：防止最后的「重置数据」方框和说明被底部 Home 指示条裁掉，
-            // 列表没有足够滚动余量只能橡皮筋弹回。
-            NonIPadSpacerView()
+
+            Section(footer: Text("resetFooter".localized)) {
+                Button {
+                    confirmDestructive(
+                        title: "resetButtonTitle".localized,
+                        message: "resetSubtitle".localized,
+                        confirmTitle: "resetButtonTitle".localized
+                    ) {
+                        isClearingData = true
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            FullResetHelper.wipeSpotifyState()
+                            DispatchQueue.main.async {
+                                exitApplication()
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text("resetButtonTitle".localized)
+                    }
+                    .foregroundColor(.red)
+                }
+            }
+
+            Section {
+                Color.clear
+                    .frame(height: 90)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+            }
         }
         .listStyle(GroupedListStyle())
-        // 强制 List 占满宿主视图可用空间，避免在 SPTPageViewController 里
-        // 被按内容高度拉伸导致滚动区错误、底部 section 滚不到。
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         
         .animation(.default, value: isClearingData)
         .animation(.default, value: hasShownCommonIssuesTip)
-        
+
         .onAppear {
             WindowHelper.shared.overrideUserInterfaceStyle(.dark)
         }

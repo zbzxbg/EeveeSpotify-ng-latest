@@ -328,6 +328,22 @@ class SpicyLyricsRepository: LyricsRepository {
             throw LyricsError.noSuchSong
         }
         let data = try performQuery(trackId: trackId)
-        return try parseLyricsData(data, trackId: trackId)
+        var dto = try parseLyricsData(data, trackId: trackId)
+
+        // SpicyLyrics 上游会把部分歌词打码成 `***`。这里按「词数 + 词位置」从其他
+        // 未打码的源（LRCLIB / Musixmatch / Genius，见 LyricsUncensorFill）把词补回：
+        // 只改行文本，行的时间戳/时长原样保留。
+        // Static(纯文本) / Line(逐行同步) / Syllable(逐字) 三条解析路径最终都汇合到
+        // dto.lines，所以接在这一处即可全部覆盖。
+        let filledContents = LyricsUncensorFill.fill(
+            lines: dto.lines.map(\.content),
+            query: query,
+            options: options
+        )
+        for (index, content) in filledContents.enumerated() where index < dto.lines.count {
+            dto.lines[index].content = content
+        }
+
+        return dto
     }
 }

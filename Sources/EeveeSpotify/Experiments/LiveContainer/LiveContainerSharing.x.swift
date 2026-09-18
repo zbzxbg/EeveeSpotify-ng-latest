@@ -9,7 +9,6 @@ class UIApplicationLiveContainerSharingHook: ClassHook<UIApplication> {
         completionHandler: (@MainActor (ObjCBool) -> Void)?
     ) {
         if UserDefaults.experimentsOptions.liveContainerSharing, !target.canOpenURL(url) {
-            writeDebugLog("[LiveContainer] Sharing via LiveContainer: \(url.absoluteString)")
             UIPasteboard.general.addItems([[UTType.url.identifier: url]])
             
             let data = url.dataRepresentation

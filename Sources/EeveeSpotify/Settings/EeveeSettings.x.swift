@@ -2,7 +2,11 @@ import Orion
 import SwiftUI
 import UIKit
 
+// Settings integration - only works on non-9.1.x versions
+struct SettingsIntegrationGroup: HookGroup { }
+
 class ProfileSettingsSectionHook: ClassHook<NSObject> {
+    typealias Group = SettingsIntegrationGroup
     static let targetName = "ProfileSettingsSection"
 
     func numberOfRows() -> Int {
@@ -26,11 +30,12 @@ class ProfileSettingsSectionHook: ClassHook<NSObject> {
             //
             
             let button = UIButton()
-
-            button.setImage(
-                BundleHelper.shared.uiImage("github").withRenderingMode(.alwaysOriginal),
-                for: .normal
-            )
+            
+            if let gitImage = BundleHelper.shared.uiImage("github") {
+                button.setImage(gitImage.withRenderingMode(.alwaysOriginal), for: .normal)
+            } else {
+                button.setImage(UIImage(systemName: "globe"), for: .normal)
+            }
             
             button.addTarget(
                 eeveeSettingsController,

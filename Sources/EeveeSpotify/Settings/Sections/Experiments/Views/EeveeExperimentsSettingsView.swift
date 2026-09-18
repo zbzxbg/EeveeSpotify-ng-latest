@@ -22,6 +22,7 @@ struct EeveeExperimentsSettingsView: View {
                     isOn: $experimentsOptions.showInstagramDestination
                 )
             }
+
         }
         .onChange(of: experimentsOptions) { options in
             UserDefaults.experimentsOptions = options
