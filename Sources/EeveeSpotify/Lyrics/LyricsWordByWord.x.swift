@@ -891,6 +891,16 @@ final class WordByWordHost {
     private var overlay: LyricsWordByWordOverlayView?
     private weak var hostView: UIView?
     private var isAttached = false
+    /// 已经渲染进 overlay 的歌词版本号。
+    /// 切歌时 `currentLyricsVersion` 会递增，用它区分「宿主没变但内容换了」——
+    /// 否则会被下面的提前返回挡住，画面停在上一次的歌词（真机症状：第二首显示第一首）。
+    private var renderedLyricsVersion: Int = -1
+    /// 当前这次挂载是不是"全屏页"（showsProviderFooter == true）。
+    /// `refreshForCurrentLyrics()` 据此避免在全屏时抢走宿主。
+    private var attachedShowsProviderFooter = false
+    /// 记住内嵌预览的宿主（VC + 命中的歌词视图），供歌词到达后重挂。
+    private weak var lastPreviewController: UIViewController?
+    private weak var lastPreviewContentView: UIView?
     /// 最近出现的内嵌歌词 VC（弱引用），全屏关闭后据此重新挂载。
     private weak var lastInlineController: UIViewController?
     /// 关闭全屏时留在原宿主上的静态替身（见 `handOffToInlineKeepingStandIn`）。
@@ -903,6 +913,23 @@ final class WordByWordHost {
     func reattachToInline() {
         guard let controller = lastInlineController else { return }
         attach(to: controller, showsTranslation: false)
+    }
+
+    /// 歌词数据到达后调用一次：把 overlay 重挂到**当前这首歌**的数据上。
+    ///
+    /// 为什么需要它：`attach` 只由宿主出现触发（`viewWillAppear` 等），而 9.1.x 上
+    /// 内嵌宿主改成了 NPV —— **NPV 只在"进入正在播放页"时出现一次，切歌不会再来**，
+    /// 所以"挂载早于数据到达"和"切歌后不刷新"这两件事都没有第二次机会。
+    /// ng 原来的触发点（歌词卡片自己的 VC）天然每首歌都会再来一次，不需要这个通知。
+    ///
+    /// 全屏页有自己的 appear 回调、时序正常，所以这里不抢它的宿主。
+    func refreshForCurrentLyrics() {
+        guard renderEnabled else { return }
+        if isAttached && attachedShowsProviderFooter { return }
+        guard let controller = lastPreviewController,
+              let contentView = lastPreviewContentView else { return }
+        writeDebugLog("[WordByWord] refresh for current lyrics (version \(currentLyricsVersion))")
+        attach(to: controller, contentView: contentView, showsTranslation: false)
     }
 
     private var renderEnabled: Bool {
@@ -929,8 +956,14 @@ final class WordByWordHost {
         let view = contentView ?? controller.view
         guard let view else { return }
 
-        // 已挂在同一视图上则跳过；换视图（内嵌 ↔ 全屏切换）时先卸载旧的再挂新的。
-        if isAttached, hostView === view { return }
+        // 已挂在同一视图上、**且渲染的就是当前这首的歌词**时才算完成；
+        // 宿主没变但歌词换了（切歌）也要重新走一遍 —— 下面紧接着就是 detach + 重挂。
+        //
+        // 这条版本判据是补 ng 原有逻辑的一个隐含前提：ng 的内嵌触发点是歌词卡片自己的
+        // VC（每首歌/每次卡片重建都会 viewDidAppear，所以"再挂一次"是自然发生的），
+        // 而那个类在 9.1.x 上已不存在，我们改用 NPV 宿主触发 —— NPV 只在进入页面时
+        // 出现一次，切歌不会再来，于是必须靠这里显式判断版本。
+        if isAttached, hostView === view, renderedLyricsVersion == currentLyricsVersion { return }
         detach()
 
         let sideInset = sideInset ?? 16
@@ -994,8 +1027,14 @@ final class WordByWordHost {
                 AppleMusicLyricsOverlayHost.shared.tick(ms: ms)
             }
             WordByWordPlaybackClock.shared.start()
+            attachedShowsProviderFooter = showsProviderFooter
+            if !showsProviderFooter {
+                lastPreviewController = controller
+                lastPreviewContentView = view
+            }
             hostView = view
             isAttached = true
+            renderedLyricsVersion = currentLyricsVersion
             return
         }
 

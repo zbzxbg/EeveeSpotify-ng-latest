@@ -116,6 +116,9 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                 writeDebugLog("[Lyrics] \(source.description) returned \(dto.lines.count) line(s)")
                 currentLyricsDto = dto.romanizedForWordByWordIfEnabled()
                 currentLyricsVersion += 1
+                // 数据到达即刷新逐词 overlay：9.1.x 上内嵌宿主是 NPV，
+                // 它只在进入正在播放页时出现一次，不会因为这首歌词到了再来一次。
+                WordByWordHost.shared.refreshForCurrentLyrics()
                 lyricsState.isEmpty = dto.lines.isEmpty
                 lyricsState.wasRomanized = dto.romanization == .romanized
                     || dto.romanization == .canBeRomanized
@@ -292,6 +295,8 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
         currentLyricsDto = dto.romanizedForWordByWordIfEnabled()
         currentLyricsVersion += 1
+        // 同上一处：数据到达后主动重挂（切歌时宿主不变，只能靠这里刷新）。
+        WordByWordHost.shared.refreshForCurrentLyrics()
 
         return Lyrics.with {
             $0.data = dto.toSpotifyLyricsData(
