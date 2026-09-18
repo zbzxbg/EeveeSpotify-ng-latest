@@ -62,17 +62,27 @@ class LyricsScrollProviderHook: ClassHook<NSObject> {
 /// 而且它是自适应表格 cell、会被复用重建。所以这里配了一个 1.5s 的看门狗
 /// （见 `startWatchdog`），只要"内嵌层没挂上/挂了但不在窗口里"就再查一次 ——
 /// 这是让预览里的逐词歌词"总能挂上、掉了还能自己回来"的关键。
+/// 内嵌（预览）歌词**内容视图**的已知类名。
+///
+/// **唯一来源**，两个消费者：
+///   · `InlineLyricsHostLocator` 用它找宿主（预览卡片的歌词文本视图）；
+///   · `WordByWordHost.attach` 用它判断"没有卡片容器时，退化成挂在内容视图上"是否安全。
+///
+/// ⚠️ 日志实证（9.1.76）：`Lyrics_TextComponentImpl.LyricsView`（366x120、挂在
+/// **歌曲封面容器**里）不在这个名单里 —— 它一旦被当成歌词内容使用，整层就跑到封面上去了。
+let inlineLyricsContentClassNames: Set<String> = [
+    "Lyrics_TextElementImpl.LyricsTextElementUI",
+    "Lyrics_TextElementImpl.LyricsTextView",
+    "Lyrics_TextElementImpl.LyricsLabelsView",
+    "Lyrics_NPVElementsKitImpl.LyricsViewElementUI",
+]
+
 enum InlineLyricsHostLocator {
     private static let viewControllerCandidates: [String] = [
         "Lyrics_TextComponentImpl.LyricsViewControllerImplementation",
     ]
 
-    private static let viewCandidates: [String] = [
-        "Lyrics_TextElementImpl.LyricsTextElementUI",
-        "Lyrics_TextElementImpl.LyricsTextView",
-        "Lyrics_TextElementImpl.LyricsLabelsView",
-        "Lyrics_NPVElementsKitImpl.LyricsViewElementUI",
-    ]
+    private static let viewCandidates = inlineLyricsContentClassNames
 
     static func scheduleLookup(from root: UIViewController?) {
         guard let root else { return }

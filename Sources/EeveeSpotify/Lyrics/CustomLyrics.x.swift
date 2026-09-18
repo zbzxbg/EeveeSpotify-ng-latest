@@ -304,6 +304,47 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
     // MARK: - DTO → Lyrics
 
+    /// 「取不到我们的歌词」时交给 Spotify 的替身 payload —— 目的是**不让 Spotify 把
+    /// 它自己的官方歌词显示出来**。
+    ///
+    /// 背景：取词失败时钩子原本走 `customLyricsData ?? buffer`，也就是把 Spotify 的原始
+    /// 响应原样放行。于是界面（歌词卡片 / 全屏页）显示的是 **Spotify 自己的歌词**：
+    /// 日区那一批的来源写着「プチリリ」——Spotify 的日文歌词供应商，**不带 (EeveeSpotify)
+    /// 后缀**（这就是"看着像 PetitLyrics 又不是"的原因），而且它是官方歌词，
+    /// 不会跟着我们的罗马化设置走。
+    ///
+    /// 返回 nil 表示**不替换**（继续用 Spotify 自己的歌词）。此时是三种情况之一：
+    ///   · 用户在来源里选了「禁用歌词替换」（`notReplaced`）—— 那就是明确要看官方歌词；
+    ///   · 「隐藏 Spotify 官方歌词」开关关着；
+    ///   · 歌词功能整体被禁用。
+    private func unavailableLyricsPayload(original: Lyrics?) -> Lyrics? {
+        guard !NgzhwmSettingsViewModel.isLyricsFeatureDisabled,
+              UserDefaults.lyricsSource != .notReplaced,
+              NgzhwmSettingsViewModel.isOfficialLyricsHidden else {
+            return nil
+        }
+
+        return Lyrics.with {
+            $0.data = LyricsData.with {
+                $0.timeSynchronized = false
+                $0.restriction = .unrestricted
+                // 署名是我们自己：界面上那一行来源不会再写成别人的品牌。
+                $0.providedBy = "EeveeSpotify"
+                $0.lines = [
+                    LyricsLine.with { $0.content = "ngzhwm_lyrics_unavailable".localized },
+                    LyricsLine.with { $0.content = "" },
+                    LyricsLine.with {
+                        $0.content = "ngzhwm_lyrics_unavailable_hint".localized
+                    },
+                ]
+            }
+            // 颜色沿用 Spotify 原来那份：背景色 / 歌名配色保持原样，看不出被替换过。
+            if let original = original {
+                $0.colors = original.colors
+            }
+        }
+    }
+
     /// 把 dto 落到全局状态上（**唯一**写入口）。
     ///
     /// 两件事必须一起做，而且是同一个顺序：
@@ -412,18 +453,28 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     do {
         lyrics = try loadCustomLyricsForCurrentTrack()
     } catch let error {
-        // 这一首没能用上我们的歌词（Spotify 会显示自己的原生歌词）→ 把逐词层的
-        // 状态清干净。不清的话上一个 overlay 会继续盖在原生歌词上显示**上一首**的内容，
-        // 连底部的来源注解也是上一首的 —— 这是"注解显示 PetitLyrics"的另一半成因。
+        // 这一首没能用上我们的歌词（界面本来会退回 Spotify 自己的官方歌词）→
+        //   1. 先把逐词层的状态清干净：不清的话上一个 overlay 会继续盖着原生歌词
+        //      显示**上一首**的内容，连底部的来源注解也是上一首的；
+        //   2. 再按「隐藏 Spotify 官方歌词」开关决定要不要用我们自己的占位 payload
+        //      把官方歌词顶掉（见 `unavailableLyricsPayload`）。
         //
-        // ⚠️ 两种错误不清：`.trackMismatch` / `.noCurrentTrack` 表示"这次请求不是
-        // 针对当前这首歌"（Spotify 会预取别的歌、或启动时序还没对齐）。那两种情况
-        // 跟屏幕上正在显示的那一首无关，清掉等于把好好的歌词一起清掉。
+        // ⚠️ 三种错误不动：`.trackMismatch` / `.noCurrentTrack` 表示"这次请求不是
+        // 针对当前这首歌"（Spotify 会预取别的歌、或启动时序还没对齐）；
+        // `.invalidSource` 是"用户选了禁用歌词替换"（明确要看官方歌词）。
+        // 这三种都跟"屏幕上这首歌没词"无关，动了等于把好好的歌词一起清掉。
         switch error as? LyricsError {
         case .some(.trackMismatch), .some(.noCurrentTrack):
             break
+        case .some(.invalidSource):
+            break
         default:
             resetWordByWordLyrics()
+            // 别让 Spotify 把它自己的官方歌词顶上来 —— 用我们自己的占位替换掉。
+            if let placeholder = unavailableLyricsPayload(original: originalLyrics) {
+                writeDebugLog("[Lyrics] official lyrics hidden — serving our placeholder")
+                return try placeholder.serializedBytes()
+            }
         }
         throw error
     }

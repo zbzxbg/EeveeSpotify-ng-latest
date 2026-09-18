@@ -1152,16 +1152,16 @@ final class WordByWordHost {
         // 在它身上找不到卡片，于是退回"整页"，我们的卡片背景铺满整个正在播放页。
         // 这就是"退出全屏后预览变全屏"。
         if let controller = lastPreviewController,
-           let contentView = lastPreviewContentView {
-            attach(to: controller, contentView: contentView, showsTranslation: false)
+           let contentView = lastPreviewContentView,
+           attach(to: controller, contentView: contentView, showsTranslation: false) {
             return
         }
-        if let controller = lastInlineController {
-            // 兜底：`attach` 内部有"整页大小一律拒绝"的判据，不会再变成全屏。
-            attach(to: controller, showsTranslation: false)
+        if let controller = lastInlineController,
+           attach(to: controller, showsTranslation: false) {
             return
         }
-        // 两个宿主都没记住（例如卡片在进全屏期间被重建）→ 让看门狗重新查找。
+        // 两个宿主都没挂上（记的是整页大小 / 卡片还没建 / 已经被重建）→
+        // 让看门狗重新查找宿主（它会避开整页、只认卡片）。
         InlineLyricsHostLocator.retryLookupIfNeeded()
     }
 
@@ -1209,11 +1209,13 @@ final class WordByWordHost {
         if let controller = lastPreviewController,
            let contentView = lastPreviewContentView {
             writeDebugLog("[WordByWord] refresh for current lyrics (version \(currentLyricsVersion))")
-            attach(to: controller, contentView: contentView, showsTranslation: false)
-            return
+            if attach(to: controller, contentView: contentView, showsTranslation: false) {
+                return
+            }
         }
 
-        // 还没找到内嵌宿主 → 让宿主查找看门狗立刻再查一次。
+        // 没挂上（没记住宿主 / 记的宿主被拒 —— 例如它落在封面容器里）→
+        // 让看门狗立刻重新查找宿主，别等下一个 1.5s 心跳。
         InlineLyricsHostLocator.retryLookupIfNeeded()
     }
 
@@ -1230,16 +1232,22 @@ final class WordByWordHost {
     /// 已删除：它依赖"原生控件是本视图的直接子视图"这个**不成立**的假设，
     /// 而且取 header 用的 `Ivars` 在 Modern 全屏页上会命中不存在的 ivar（崩）。
     /// 旧 overlay 的显隐现在完全由"有没有逐词数据"决定，不需要它。
+    ///
+    /// - Returns: 这一层现在是不是**挂着的**。调用方（`refreshForCurrentLyrics` /
+    ///   `reattachToInline`）据此决定要不要让看门狗立刻重找宿主 ——
+    ///   预览场景里有几条"宁可不挂"的判据（没有卡片证据 / 整页大小），
+    ///   那几种情况下"再挂一次"是白费力气，必须换宿主。
+    @discardableResult
     func attach(
         to controller: UIViewController,
         contentView: UIView? = nil,
         sideInset: CGFloat? = nil,
         showsProviderFooter: Bool = false,
         showsTranslation: Bool = true
-    ) {
-        guard renderEnabled else { return }
+    ) -> Bool {
+        guard renderEnabled else { return false }
         let view = contentView ?? controller.view
-        guard let view else { return }
+        guard let view else { return false }
 
         // ── 先把「内嵌预览的宿主」记下来，**早于任何数据判据** ────────────────────
         //
@@ -1271,7 +1279,7 @@ final class WordByWordHost {
         // VC（每首歌/每次卡片重建都会 viewDidAppear，所以"再挂一次"是自然发生的），
         // 而那个类在 9.1.x 上已不存在，我们改用 NPV 宿主触发 —— NPV 只在进入页面时
         // 出现一次，切歌不会再来，于是必须靠这里显式判断版本。
-        if isAttached, hostView === view, renderedLyricsVersion == currentLyricsVersion { return }
+        if isAttached, hostView === view, renderedLyricsVersion == currentLyricsVersion { return true }
         detach()
 
         let sideInset = sideInset ?? 16
@@ -1307,7 +1315,32 @@ final class WordByWordHost {
             // 壳这一层从此由我们画（`previewHeader` 就是那一行），粉杠问题不复存在。
             //
             // 全屏不受影响：它本来就挂 vc.view，并且自己画了整套壳。
-            var mountView = showsProviderFooter ? view : (Self.cardContainer(for: view) ?? view)
+            //
+            // ── 预览的宿主判据（严格） ────────────────────────────────────────
+            // 必须**先找到卡片容器**（见 `cardContainer` 的四条证据）。找不到卡片时，
+            // 只有当内容视图本身是"已知的卡片歌词视图类"、或者是个**不自称歌词**的
+            // 普通视图（老版本的 `LyricsOnlyViewController.view` 就是这种）才允许退化挂载。
+            //
+            // 被拒的正是日志 4 里那一种：`Lyrics_TextComponentImpl.LyricsView`
+            // （366x120，实际待在**歌曲封面容器** 366x432 里）—— 名字里带 Lyrics、
+            // 却不在"卡片歌词视图"名单里，卡片那一刻也还没建出来。退化挂载的后果是
+            // 整层跑到封面上（`[PreviewShell] card container=UIView 366x432`）。
+            // 拒绝之后什么都不挂，看门狗会在卡片建好时自己挂上来。
+            let className = NSStringFromClass(type(of: view))
+            let isKnownLyricsContent = inlineLyricsContentClassNames.contains(className)
+            let claimsToBeLyrics = className.contains("Lyrics")
+            let card = showsProviderFooter ? nil : Self.cardContainer(for: view)
+            if !showsProviderFooter,
+               card == nil,
+               claimsToBeLyrics,
+               !isKnownLyricsContent {
+                logRejectionThrottled(
+                    "[WordByWord] ⚠️ preview host rejected — no card and foreign lyrics view"
+                        + " (\(className)) — will retry"
+                )
+                return false
+            }
+            var mountView = showsProviderFooter ? view : (card ?? view)
             if !showsProviderFooter, Self.isPageSized(mountView) {
                 // 卡片判据把"整页"当成了卡片（`cardContainer` 的尺寸启发式在
                 // 宿主根视图上必然如此）。照挂就是"预览变全屏"：一块卡片背景
@@ -1317,7 +1350,7 @@ final class WordByWordHost {
                         "[WordByWord] ⚠️ no safe preview mount point"
                             + " (\(NSStringFromClass(type(of: mountView))) is page-sized) — skipped"
                     )
-                    return
+                    return false
                 }
                 writeDebugLog(
                     "[WordByWord] preview mount view is page-sized"
@@ -1325,11 +1358,22 @@ final class WordByWordHost {
                 )
                 mountView = view
             }
-            // 卡片比歌词视图高出来的那段（实测 39pt）= 我们自绘标题栏要占的高度。
+            // 卡片比歌词视图高出来的那段（实测 39～64pt）= 我们自绘标题栏要占的高度。
             // 全屏传 62（曲名 + 歌手两行，与页面默认值一致）。
-            let headerInset = showsProviderFooter
-                ? 62
-                : max(mountView.bounds.height - view.bounds.height, 0)
+            //
+            // ⚠️ 预览要做范围检查：量出来的差值可能是**错的**（内容视图与卡片不等高，
+            // 或者某一方还没布局完）。离谱的值会让标题栏占掉半张卡片、把歌词推下去 ——
+            // 这时宁可传 0，让页面退回实测默认值（预览标题栏一行 ≈ 39pt）。
+            let measuredInset = mountView.bounds.height - view.bounds.height
+            let headerInset: CGFloat
+            if showsProviderFooter {
+                headerInset = 62
+            } else if measuredInset >= Self.previewMinCardExtraHeight,
+                      measuredInset <= Self.previewCardMaxExtraHeight {
+                headerInset = measuredInset
+            } else {
+                headerInset = 0
+            }
             AppleMusicLyricsOverlayHost.shared.update(
                 in: mountView,
                 sideInset: sideInset,
@@ -1359,7 +1403,7 @@ final class WordByWordHost {
             hostView = view
             isAttached = true
             renderedLyricsVersion = currentLyricsVersion
-            return
+            return true
         }
 
         // 用不上新层就把它摘掉（例如从有逐字的歌切到纯 LRC 的歌）。
@@ -1369,7 +1413,7 @@ final class WordByWordHost {
 
         // 数据不可用时保持原生歌词，不做任何覆盖：
         // 铺一层空白背景比直接放行原生渲染更糟。
-        guard usable else { return }
+        guard usable else { return false }
 
         // ⚠️ 旧层同样不许挂到"整页大小"的视图上。
         //
@@ -1382,7 +1426,7 @@ final class WordByWordHost {
                 "[WordByWord] ⚠️ preview host is page-sized"
                     + " (\(NSStringFromClass(type(of: view)))) — skipped"
             )
-            return
+            return false
         }
 
         let overlayView = LyricsWordByWordOverlayView(frame: view.bounds)
@@ -1433,6 +1477,7 @@ final class WordByWordHost {
         WordByWordPlaybackClock.shared.tickHandler = nil
         WordByWordPlaybackClock.shared.start()
         writeDebugLog("[WordByWord] overlay attached")
+        return true
     }
 
     func detach() {
@@ -1486,62 +1531,59 @@ final class WordByWordHost {
 
     // MARK: 预览卡片容器
 
-    /// 预览卡片的容器：从歌词视图往上找第一个**比它高**的祖先。
+    /// 预览卡片的容器。
     ///
-    /// 为什么按"更高"而不是按类名：日志实测那两层是
+    /// 历史：最初按"从歌词视图往上找第一个**比它高**的祖先"来判（因为实测
     /// `Lyrics_NPVCommunicatorImpl.CardView(374x300)` ← 歌词视图 `(374x261)`，
-    /// 差 39pt 正好是卡片顶部标题栏那一行。用尺寸关系判断比写死类名稳 ——
-    /// 类名会随版本变，而"卡片比里面的歌词内容高"这个关系不会。
+    /// 差 39pt 正好是卡片标题栏那一行，而"更高"比写死类名稳）。
     ///
-    /// 找不到就返回 nil（调用方退回原挂载点，不至于完全不工作）。
+    /// ⚠️ 这条判据太松，已经**出过真机事故**（日志 4）：
+    /// `[PreviewShell] card container=UIView 366x432 lyrics=366x120` —— 它把
+    /// **歌曲封面容器**当成了卡片（差 312pt），于是预览逐词层被挂到封面上，
+    /// 而真正的卡片是 `Lyrics_CardElementImpl.CardView 374x320` ← `342x256`（差 64）。
     ///
-    /// ⚠️ 9.1.76 补充：尺寸启发式在这一版会**全部失败** —— 该版本的预览歌词是
-    /// 自适应高度的表格 cell（`Lyrics_TextElementImpl.LyricsCell` +
-    /// `SelfSizingTableView`），祖先与歌词视图**等高**，`height > view.height + 0.5`
-    /// 一条都不成立。真机日志表现为
-    /// `[PreviewShell] ⚠️ no card container found — falling back to lyrics view`，
-    /// overlay 于是退化成挂在歌词文本视图上（预览看起来没有逐词 / 位置不对）。
-    ///
-    /// 因此在保留原尺寸启发式（优先，兼容旧版本）的前提下，补一条**按类名**的兜底。
-    /// 白名单只含歌词自己的容器，不会误抓到滚动容器或整页根视图。
+    /// 所以现在按**证据强弱**排四条判据（见下），全不成立就返回 nil：
+    /// 调用方据此**宁可不挂**，由看门狗在卡片建好之后再挂一次。
     static func cardContainer(for view: UIView) -> UIView? {
+        // ① 语义：最近的、子树里含歌词标题栏按钮（展开 / 分享）的祖先。
+        //    卡片 = 歌词内容 + 标题栏那一行；按钮和内容同在卡片里，这是最硬的证据。
+        //    （封面容器里没有这两颗按钮，因此不会被误判。）
+        if let card = ancestorContainingLyricsHeaderButtons(of: view) {
+            return logAndReturnCardContainer(card, lyrics: view, label: "header buttons")
+        }
+
+        // ② 类名：卡片本体。它含 `CardHeaderView`（"歌词" + 分享/展开那一行）
+        //    + `CardContentView`，我们那层壳正是要盖住整张卡片。
+        //    只匹配到 `CardContentView` 的后果已在真机截图实证：**两层壳** ——
+        //    Spotify 的标题栏露在外面，我们又画了一个，尺寸还完全相同。
+        if let card = ancestor(in: view, matching: Self.preferredCardClassNames) {
+            return logAndReturnCardContainer(card, lyrics: view, label: "card")
+        }
+
+        // ③ 尺寸（**收紧**）：卡片只比歌词内容高出一个标题栏的量级。
+        //    只往上找 4 层：再往上就是滚动容器（cell / collection view），挂那儿就出界了。
         var current: UIView? = view.superview
         var depth = 0
-        // 只往上找 4 层：再往上就是滚动容器（cell / collection view），挂那儿就出界了。
         while let node = current, depth < 4 {
-            if node.bounds.height > view.bounds.height + 0.5,
+            let extra = node.bounds.height - view.bounds.height
+            if extra >= Self.previewMinCardExtraHeight,
+               extra <= Self.previewCardMaxExtraHeight,
                node.bounds.width >= view.bounds.width - 0.5 {
-                writeDebugLog(
-                    "[PreviewShell] card container="
-                        + "\(NSStringFromClass(type(of: node)))"
-                        + " \(Int(node.bounds.width))x\(Int(node.bounds.height))"
-                        + " lyrics=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
-                )
-                return node
+                return logAndReturnCardContainer(node, lyrics: view, label: "by size")
             }
             current = node.superview
             depth += 1
         }
 
-        // 尺寸启发式失败 → 按 9.1.x 实际存在的类名兜底（最多上溯 12 层）。
-        //
-        // ⚠️ 两段式，顺序很关键：
-        //   1) 先整条链找**卡片本体**（`…CardView`）。它含 `CardHeaderView`（"歌词" +
-        //      分享/展开那一行）+ `CardContentView`，我们那层壳正是要盖住整张卡片。
-        //      只匹配到 `CardContentView` 的后果已在真机截图实证：**两层壳** ——
-        //      Spotify 的标题栏露在外面，我们又画了一个，尺寸还完全相同
-        //      （日志 `CardContentView 342x256 lyrics=342x256`，headerInset 算成 0）。
-        //   2) 找不到卡片本体，才退到通用容器，并且**取最外层**那一个（最接近整张卡片），
-        //      而不是自下往上第一个命中的。
-        if let card = ancestor(in: view, matching: Self.preferredCardClassNames) {
-            return logAndReturnCardContainer(card, lyrics: view, label: "card")
-        }
-
+        // ④ 既有白名单兜底：找不到卡片本体时退到通用容器，并且**取最外层**那一个
+        //    （最接近整张卡片），而不是自下往上第一个命中的。同样要过高度上限 ——
+        //    否则会把整页容器抓进来（那就是"预览变全屏"）。
         var outermost: UIView?
         var fallback: UIView? = view.superview
         var fallbackDepth = 0
         while let node = fallback, fallbackDepth < 12 {
-            if Self.knownCardContainerClassNames.contains(NSStringFromClass(type(of: node))) {
+            if Self.knownCardContainerClassNames.contains(NSStringFromClass(type(of: node))),
+               node.bounds.height <= Self.previewCardMaxHeight {
                 outermost = node
             }
             fallback = node.superview
@@ -1551,22 +1593,79 @@ final class WordByWordHost {
             return logAndReturnCardContainer(outermost, lyrics: view, label: "by class")
         }
 
-        writeDebugLog("[PreviewShell] ⚠️ no card container found — falling back to lyrics view")
+        writeDebugLog(
+            "[PreviewShell] ⚠️ no card container found — caller falls back to the content view"
+        )
         dumpAncestorChain(from: view)
         return nil
     }
+
+    /// 卡片相对歌词内容允许高出的范围：只比内容高一点（标题栏），不能是一个大容器。
+    private static let previewMinCardExtraHeight: CGFloat = 4
+    private static let previewCardMaxExtraHeight: CGFloat = 140
+    /// 卡片本体的合理高度上限：超过它就不是卡片，而是整页 / 滚动容器。
+    private static let previewCardMaxHeight: CGFloat = 500
+
+    /// 从 `view` 往上找最近的、子树里含「歌词标题栏按钮」的祖先（最多 12 层、高度受限）。
+    ///
+    /// 高度上限用**绝对值**而不是"相对歌词内容"：卡片刚建出来、歌词内容还没布局时
+    /// 内容高度会小得离谱，相对判据会把真卡片也一起否定掉。
+    private static func ancestorContainingLyricsHeaderButtons(of view: UIView) -> UIView? {
+        var node: UIView? = view.superview
+        var depth = 0
+        while let current = node, depth < 12 {
+            if current.bounds.height <= Self.previewCardMaxHeight,
+               containsLyricsHeaderButton(current) {
+                return current
+            }
+            node = current.superview
+            depth += 1
+        }
+        return nil
+    }
+
+    /// 子树里有没有歌词标题栏那一行（展开 / 分享）的按钮。
+    ///
+    /// 按**无障碍 id** 找：那是 Spotify 为 VoiceOver 维护的稳定标识，真机 dump 已确认
+    /// （`lyrics-expand-button`「将歌词界面扩展至全屏」、`lyrics-share-button`「分享歌词」）。
+    /// 不按标签找 —— 标签会随语言变。
+    private static func containsLyricsHeaderButton(_ root: UIView) -> Bool {
+        var queue: [UIView] = [root]
+        var visited = 0
+        while !queue.isEmpty, visited < 400 {
+            let view = queue.removeFirst()
+            visited += 1
+            if let control = view as? UIControl,
+               let identifier = control.accessibilityIdentifier,
+               Self.lyricsHeaderButtonIdentifiers.contains(identifier) {
+                return true
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return false
+    }
+
+    private static let lyricsHeaderButtonIdentifiers: Set<String> = [
+        "lyrics-expand-button",
+        "lyrics-share-button",
+    ]
 
     /// 兜底诊断：把从歌词视图往上 12 层的「类名 + 尺寸」全部打出来。
     ///
     /// 只要这条链出现在日志里，就能**一次性看出**真正的卡片容器是哪个类（以及它离
     /// 歌词视图有几层），不必再去翻 IPA 猜类名 —— 上一轮 `Lyrics_CardElementImpl.CardView`
     /// 就是这么找出来的。正常命中白名单时不会打这条，所以它出现即代表白名单仍需扩充。
+    ///
+    /// ⚠️ 带节流：宿主看门狗每 1.5s 就会重走一次这条路，而"卡片还没建出来"期间
+    /// 这条 dump 会**一模一样地反复出现**（一次 13 行，`writeDebugLog` 是写文件的）。
+    /// 同一条链 10s 内只记一次；链变了立刻记（那才是有用的信息）。
     private static func dumpAncestorChain(from view: UIView) {
+        var lines: [String] = []
         var node: UIView? = view
         var depth = 0
         while let current = node, depth <= 12 {
             let frame = current.frame
-            writeDebugLog(
+            lines.append(
                 "[PreviewShell] chain[\(depth)] "
                     + "\(NSStringFromClass(type(of: current))) "
                     + "\(Int(frame.width))x\(Int(frame.height))"
@@ -1575,6 +1674,37 @@ final class WordByWordHost {
             node = current.superview
             depth += 1
         }
+
+        let signature = lines.joined(separator: "|")
+        let now = Date()
+        if signature == lastChainDumpSignature,
+           now.timeIntervalSince(lastChainDumpTime) < 10 {
+            return   // 同一条链刚打过（看门狗每 1.5s 走一次这条路）—— 静默跳过
+        }
+        lastChainDumpSignature = signature
+        lastChainDumpTime = now
+        for line in lines { writeDebugLog(line) }
+    }
+
+    private static var lastChainDumpSignature: String = ""
+    private static var lastChainDumpTime: Date = .distantPast
+
+    /// 单槽诊断节流：同一条消息 `interval` 秒内只记一次。
+    ///
+    /// 与链 dump 各用一套槽位，互不干扰：两者会被同一段重试循环交替触发，
+    /// 共用一个槽位等于谁都没被节流。
+    private static var lastRejectionMessage: String = ""
+    private static var lastRejectionTime: Date = .distantPast
+
+    private static func logRejectionThrottled(_ message: String, interval: TimeInterval = 10) {
+        let now = Date()
+        if message == lastRejectionMessage,
+           now.timeIntervalSince(lastRejectionTime) < interval {
+            return
+        }
+        lastRejectionMessage = message
+        lastRejectionTime = now
+        writeDebugLog(message)
     }
 
     /// **卡片本体**：优先级高于其它所有容器。9.1.76 上是

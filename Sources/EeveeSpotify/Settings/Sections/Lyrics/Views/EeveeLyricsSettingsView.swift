@@ -45,6 +45,7 @@ struct EeveeLyricsSettingsView: View {
                 }
                 
                 hideOnErrorSection()
+                hideOfficialLyricsSection()
                 romanizationSection()
                 
                 // 多级回退链路包含 Musixmatch，其语言项同样可配置。
@@ -157,6 +158,22 @@ struct EeveeLyricsSettingsView: View {
             )
         } footer: {
             Text("hide_lyrics_on_error_description".localized)
+        }
+    }
+
+    /// 「隐藏 Spotify 官方歌词」：逐词层之外的**数据层**开关。
+    ///
+    /// 与上面那条（上游的「隐藏歌词模块」，其 hook 在 9.1.x 上已不存在、属于死代码）
+    /// 的区别：这一条是真的在**替换交给 Spotify 的那份歌词数据**，
+    /// 所以卡片 / 全屏页都不会再显示 Spotify 官方歌词。
+    @ViewBuilder private func hideOfficialLyricsSection() -> some View {
+        Section {
+            Toggle(
+                "ngzhwm_hide_official_lyrics".localized,
+                isOn: $viewModel.hideOfficialLyrics
+            )
+        } footer: {
+            Text("ngzhwm_hide_official_lyrics_description".localized)
         }
     }
 

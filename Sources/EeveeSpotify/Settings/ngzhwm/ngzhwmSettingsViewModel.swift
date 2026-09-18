@@ -9,6 +9,7 @@ class NgzhwmSettingsViewModel: ObservableObject {
     static let wordByWordLyricsKey = "ngzhwm_wordByWordLyrics"
     static let betterWordByWordLyricsKey = "ngzhwm_betterWordByWordLyrics"
     static let amllPreferredKey = "ngzhwm_amllPreferred"
+    static let hideOfficialLyricsKey = "ngzhwm_hideOfficialLyrics"
     static let blurredLyricsBackdropKey = "ngzhwm_blurredLyricsBackdrop"
     static let lyricsBackdropMaterialKey = "ngzhwm_lyricsBackdropMaterial"
 
@@ -46,6 +47,21 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// 默认关闭，已装用户的既有行为不变。
     static var isAmllPreferred: Bool {
         bool(forKey: amllPreferredKey, defaultValue: false)
+    }
+
+    /// 「隐藏 Spotify 官方歌词」：我方来源取不到词时，**不再把 Spotify 的原始响应放行**，
+    /// 而是用我们自己的一小段「未找到歌词」占位顶上去。
+    ///
+    /// 为什么需要：钩子在取词失败时原本是 `customLyricsData ?? buffer`，于是界面上显示的是
+    /// **Spotify 自己的歌词** —— 日区那批的来源写着「プチリリ」（Spotify 的日文歌词供应商，
+    /// **不带 (EeveeSpotify) 后缀**），而且不会跟着我们的罗马化设置走，
+    /// 看起来就像"来源设置没生效 / 罗马化设置失效"。
+    ///
+    /// 默认**开启**：用户选定了某个来源，预期就是"要么显示这个来源的词，要么什么都不显示"，
+    /// 而不是"取不到就悄悄换成 Spotify 的"。想恢复官方歌词，关掉这一项即可
+    /// （或者在来源里选「禁用歌词替换」——那是明确要看官方歌词的模式）。
+    static var isOfficialLyricsHidden: Bool {
+        bool(forKey: hideOfficialLyricsKey, defaultValue: true)
     }
 
     /// 「模糊封面背景」是否生效。

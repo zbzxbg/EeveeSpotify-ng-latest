@@ -800,15 +800,41 @@ class NeteaseLyricsRepository: LyricsRepository {
         }
         writeDebugLog("[NetEase] Search returned \(songs.count) result(s)")
 
-        // 选歌：信任网易搜索相关度，直接取第一位（搜索词已是完整歌名+歌手，
-        // 第一位基本就是目标歌）。时长闸门：第一位时长与 Spotify 差 > 5s 时
-        // 视为不是目标歌，抛 noSuchSong 交给 Genius。
-        let chosen = songs.first!
-        writeDebugLog("[NetEase] Chosen: \(chosen["name"] as? String ?? "?") (id \(chosen["id"] ?? "?"))")
-
+        // 选歌：信任网易搜索相关度（搜索词已是完整歌名 + 歌手），但**不再盲取第一位**。
+        //
+        // 时长闸门的原实现只看第一位：第一位时长与 Spotify 差 > 5s 就直接 noSuchSong，
+        // 哪怕后面几位的时长完全对得上也拿不到词。真机日志实证（`eeveespotify_debug 4.log`）：
+        // 「だれかの心臓になれたなら」的第一位是《ウサギの現実は逃げる》（198s vs 229s）
+        // → 整首没有我们的歌词 → 界面交还 Spotify 自己的歌词，全屏页脚因此写着
+        // 「歌词提供者：プチリリ」（那是 Spotify 日区歌词的来源，不是我们），
+        // 而且不跟着罗马化设置走。
+        //
+        // 现在：**按相关度顺序**在候选里找第一个时长对得上的；一个都对不上，
+        // 才退回原判据（取第一位，若第一位时长不符则 noSuchSong 交给兜底源）。
+        // 安全性不变：时长不符的候选仍然不会被采用。
+        let durationToleranceMs = 5000
+        let chosen: [String: Any]
+        let chosenIndex: Int
         if let spotifyDurationMs = query.durationMs,
+           let match = songs.enumerated().first(where: { entry in
+               guard let ms = (entry.element["duration"] as? NSNumber)?.intValue else { return false }
+               return abs(ms - spotifyDurationMs) <= durationToleranceMs
+           }) {
+            chosen = match.element
+            chosenIndex = match.offset
+        } else {
+            chosen = songs[0]
+            chosenIndex = 0
+        }
+        writeDebugLog(
+            "[NetEase] Chosen[\(chosenIndex)]: \(chosen["name"] as? String ?? "?")"
+                + " (id \(chosen["id"] ?? "?"))"
+        )
+
+        if chosenIndex == 0,
+           let spotifyDurationMs = query.durationMs,
            let neteaseDurationMs = (chosen["duration"] as? NSNumber)?.intValue,
-           abs(neteaseDurationMs - spotifyDurationMs) > 5000 {
+           abs(neteaseDurationMs - spotifyDurationMs) > durationToleranceMs {
             writeDebugLog("[NetEase] Duration mismatch: spotify=\(spotifyDurationMs)ms netease=\(neteaseDurationMs)ms — noSuchSong")
             throw LyricsError.noSuchSong
         }

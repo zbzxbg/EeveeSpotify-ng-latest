@@ -148,6 +148,10 @@ ngzhwm_japanese_romanization = "Romanize Japanese Lyrics";
 ngzhwm_korean_romanization = "Romanize Korean Lyrics";
 ngzhwm_remove_interlude_symbol = "Delete Interlude Symbol \"♪\"";
 ngzhwm_remove_interlude_symbol_description = "When this option is enabled, the interlude symbol \"♪\" is removed from lyrics, and lines containing \"♪\" are displayed as blank.";
+ngzhwm_hide_official_lyrics = "Hide Spotify's Official Lyrics";
+ngzhwm_hide_official_lyrics_description = "When enabled, if your custom lyrics source has no lyrics for the track, Spotify's own lyrics are no longer shown (their provider and romanization are outside this tweak's control) — a short notice is shown instead. Disable this to fall back to Spotify's own lyrics.";
+ngzhwm_lyrics_unavailable = "No lyrics found";
+ngzhwm_lyrics_unavailable_hint = "Try another lyrics source in Settings, or try again later.";
 // Debug
 
 debug_title = "Debug";

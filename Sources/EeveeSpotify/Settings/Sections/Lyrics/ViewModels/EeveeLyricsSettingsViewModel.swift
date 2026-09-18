@@ -45,6 +45,15 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
     
+    @Published var hideOfficialLyrics = NgzhwmSettingsViewModel.isOfficialLyricsHidden {
+        didSet {
+            UserDefaults.standard.set(
+                hideOfficialLyrics,
+                forKey: NgzhwmSettingsViewModel.hideOfficialLyricsKey
+            )
+        }
+    }
+    
     // 注：背景相关（模糊封面 / 系统材质）**没有** Published 属性 ——
     // 它们不是用户可选项，而是跟随「更好的逐词歌词」自动启用。
     // 见 NgzhwmSettingsViewModel.isLyricsBlurredBackdropEnabled。
@@ -106,6 +115,7 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
             betterWordByWordLyrics,
             wordByWordLyrics,
             amllPreferred,
+            hideOfficialLyrics,
             disableLyricsFeature,
             removeMxmInterludeSymbol,
             neteaseRomajiLocal,
