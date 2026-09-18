@@ -1,34 +1,22 @@
-### Based on [EeveeSpotify](https://github.com/whoeevee/EeveeSpotifyReborn), but better.
+Based on EeveeSpotifyReincarnated and EeveeSpotify-ng.
 
-This fork is independently maintained by me and is not affiliated with the original author, whoeevee.
+This repository is independently maintained by me and is not affiliated with whoeevee or SideloadLabs.
 
-Due to school commitments, the update frequency will be reduced for the time being. I’ll try to push out a new release on every public holiday.
+The contents of this repository will be updated when EeveeSpotify-ng or EeveeSpotifyReincarnated is updated (within two weeks of the aforementioned repositories releasing a new version).
 
-Beta and demo versions are not released to the public.
+ Version
+Latest public release None
+Current development version v0.1.0-beta.1
+Development version last updated 2026/09/18
 
-| | Version |
-| --- | --- |
-| Latest public release | None |
-| Current development version | [v0.1.0-beta.1](CHANGELOG.md)|
-| Development version last updated | 2026/09/18 |
+⚠️ Notice
 
-## 🔧 Modifications
-
-- Added three additional lyrics sources: NetEase, SpicyLyrics, and AMLL.
-- Implemented word-by-word lyrics.
-- Various other modifications and improvements.
-
-## ⚠️ Notice
-
-- It is recommended that you first familiarize yourself with whoeevee's original EeveeSpotify 9.1.0 before using this project.
-- **Verified environment:** iPhone 11 · iOS 26.6.1 · EeveeSpotify 9.1.0 · certificate-signed build · LCSign · rootless DEB.
-- The modified features in this fork have been verified to work in this environment.
-- No IPA package is provided.
-- Localization currently includes English and Simplified Chinese only. Localization files for other languages have been removed from this repository for maintenance purposes.
-
-## ❤️ Acknowledgements
-
-- Thanks to [whoeevee](https://github.com/whoeevee) for the original EeveeSpotify project.
-- Thanks to [SideloadLabs](https://github.com/SideloadLabs/EeveeSpotifyReincarnated) for creating the SpicyLyrics lyrics provider, as well as the logging and export functionality. The relevant code has been modified to fit this project.
-- Thanks to the [MeloX](https://github.com/youshen2/MeloX) project for the inspiration behind this project's karaoke lyrics feature. The relevant code has been modified to fit this project.
----
+· This repository only contains feature migrations/ports from EeveeSpotify-ng.
+· It is recommended that you first familiarize yourself with the following three versions of Spotify before using this project:
+  1. whoeevee's original EeveeSpotify 9.1.0
+  2. EeveeSpotify-ng 9.1.0 (from the EeveeSpotify-ng project)
+  3. SideloadLabs' EeveeSpotifyReincarnated
+· Verified environment: TBD
+· No IPA package is provided.
+· Localization currently includes English and Simplified Chinese only. Localization files for other languages have been removed from this repository for maintenance purposes.
+· Since this repository is based on EeveeSpotify-ng and EeveeSpotifyReincarnated, any enhanced features in this repository will not be detailed here. Those who need them can check EeveeSpotify-ng.
