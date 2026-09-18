@@ -1106,6 +1106,16 @@ final class WordByWordHost {
     /// 类名会随版本变，而"卡片比里面的歌词内容高"这个关系不会。
     ///
     /// 找不到就返回 nil（调用方退回原挂载点，不至于完全不工作）。
+    ///
+    /// ⚠️ 9.1.76 补充：尺寸启发式在这一版会**全部失败** —— 该版本的预览歌词是
+    /// 自适应高度的表格 cell（`Lyrics_TextElementImpl.LyricsCell` +
+    /// `SelfSizingTableView`），祖先与歌词视图**等高**，`height > view.height + 0.5`
+    /// 一条都不成立。真机日志表现为
+    /// `[PreviewShell] ⚠️ no card container found — falling back to lyrics view`，
+    /// overlay 于是退化成挂在歌词文本视图上（预览看起来没有逐词 / 位置不对）。
+    ///
+    /// 因此在保留原尺寸启发式（优先，兼容旧版本）的前提下，补一条**按类名**的兜底。
+    /// 白名单只含歌词自己的容器，不会误抓到滚动容器或整页根视图。
     static func cardContainer(for view: UIView) -> UIView? {
         var current: UIView? = view.superview
         var depth = 0
@@ -1124,9 +1134,75 @@ final class WordByWordHost {
             current = node.superview
             depth += 1
         }
+
+        // 尺寸启发式失败 → 按 9.1.x 实际存在的歌词容器类名兜底（最多上溯 12 层）。
+        var fallback: UIView? = view.superview
+        var fallbackDepth = 0
+        while let node = fallback, fallbackDepth < 12 {
+            if Self.knownCardContainerClassNames.contains(NSStringFromClass(type(of: node))) {
+                writeDebugLog(
+                    "[PreviewShell] card container (by class)="
+                        + "\(NSStringFromClass(type(of: node)))"
+                        + " \(Int(node.bounds.width))x\(Int(node.bounds.height))"
+                        + " lyrics=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
+                )
+                return node
+            }
+            fallback = node.superview
+            fallbackDepth += 1
+        }
+
         writeDebugLog("[PreviewShell] ⚠️ no card container found — falling back to lyrics view")
+        dumpAncestorChain(from: view)
         return nil
     }
+
+    /// 兜底诊断：把从歌词视图往上 12 层的「类名 + 尺寸」全部打出来。
+    ///
+    /// 只要这条链出现在日志里，就能**一次性看出**真正的卡片容器是哪个类（以及它离
+    /// 歌词视图有几层），不必再去翻 IPA 猜类名 —— 上一轮 `Lyrics_CardElementImpl.CardView`
+    /// 就是这么找出来的。正常命中白名单时不会打这条，所以它出现即代表白名单仍需扩充。
+    private static func dumpAncestorChain(from view: UIView) {
+        var node: UIView? = view
+        var depth = 0
+        while let current = node, depth <= 12 {
+            let frame = current.frame
+            writeDebugLog(
+                "[PreviewShell] chain[\(depth)] "
+                    + "\(NSStringFromClass(type(of: current))) "
+                    + "\(Int(frame.width))x\(Int(frame.height))"
+                    + (current === view ? "   ← lyrics view" : "")
+            )
+            node = current.superview
+            depth += 1
+        }
+    }
+
+    /// 9.1.76 主二进制类名扫描确认存在的「预览歌词卡片」容器类。
+    ///
+    /// ⚠️ 关键发现：9.1.76 里有一整个专门模块 `Lyrics_CardElementImpl`，
+    /// 卡片本体是 **`Lyrics_CardElementImpl.CardView`**（配套 `CardHeaderView` =
+    /// 「歌词/分享/展开」那一行，`CardContentView` = 卡片内容）。
+    /// ng 注释里提到的 `Lyrics_NPVCommunicatorImpl.CardView` **搬到了这个新模块**，
+    /// 这正是尺寸启发式在 9.1.76 上失效的原因。
+    ///
+    /// 只列歌词自己的容器；**不要**把滚动容器、`NPVScrollViewController` 一类加进来，
+    /// 那会重新变成铺满整页。
+    private static let knownCardContainerClassNames: Set<String> = [
+        // 9.1.76 的预览歌词卡片（首选）
+        "Lyrics_CardElementImpl.CardView",
+        "Lyrics_CardElementImpl.CardContentView",
+        // 元素框架的包装层
+        "Lyrics_NPVElementsKitImpl.LyricsElementContainerView",
+        "Lyrics_NPVElementsKitImpl.LyricsElementWrapperView",
+        "Lyrics_NPVContainerKit.LyricsContainerView",
+        // 自适应表格 cell（预览歌词所在的 cell）
+        "Lyrics_TextElementImpl.LyricsCell",
+        "Lyrics_TextComponentImpl.LyricsCell",
+        "Lyrics_TextElementSingalongImpl.LyricsCell",
+        // 旧版本的卡片（9.1.76 已无，留作兼容）
+        "Lyrics_NPVCommunicatorImpl.CardView",
+    ]
 
     private func installStandIn() {
         removeStandIn()
