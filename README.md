@@ -1,5 +1,3 @@
-> **Language:** English | [简体中文](README-zhcn.md)
-
 ### Based on [EeveeSpotify](https://github.com/whoeevee/EeveeSpotifyReborn), but better.
 
 This fork is independently maintained by me and is not affiliated with the original author, whoeevee.
@@ -11,8 +9,8 @@ Beta and demo versions are not released to the public.
 | | Version |
 | --- | --- |
 | Latest public release | None |
-| Current development version | [v6.0.0-beta.8(build 19)](CHANGELOG.md)|
-| Development version last updated | 2026/09/13 |
+| Current development version | [v0.1.0-beta.1(CHANGELOG.md)|
+| Development version last updated | 2026/09/18 |
 
 ## 🔧 Modifications
 
