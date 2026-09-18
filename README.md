@@ -1,4 +1,4 @@
-Based on EeveeSpotifyReincarnated(https://github.com/SideloadLabs/EeveeSpotifyReincarnated) and EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng)(https://github.com/zbzxbg/EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng)).
+Based on EeveeSpotifyReincarnated(https://github.com/SideloadLabs/EeveeSpotifyReincarnated) and EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng).
 
 This repository is independently maintained by me and is not affiliated with whoeevee or SideloadLabs.
 
@@ -20,4 +20,4 @@ The contents of this repository will be updated when EeveeSpotify-ng(https://git
 · Verified environment: TBD
 · No IPA package is provided.
 · Localization currently includes English and Simplified Chinese only. Localization files for other languages have been removed from this repository for maintenance purposes.
-· Since this repository is based on EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng) and EeveeSpotifyReincarnated(https://github.com/SideloadLabs/EeveeSpotifyReincarnated), any enhanced features in this repository will not be detailed here. Those who need them can check EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng))))))).
+· Since this repository is based on EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng) and EeveeSpotifyReincarnated(https://github.com/SideloadLabs/EeveeSpotifyReincarnated), any enhanced features in this repository will not be detailed here. Those who need them can check EeveeSpotify-ng(https://github.com/zbzxbg/EeveeSpotify-ng).
