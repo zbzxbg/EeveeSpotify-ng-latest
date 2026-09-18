@@ -1329,12 +1329,12 @@ final class WordByWordHost {
             let className = NSStringFromClass(type(of: view))
             let isKnownLyricsContent = inlineLyricsContentClassNames.contains(className)
             let claimsToBeLyrics = className.contains("Lyrics")
-            let card = showsProviderFooter ? nil : Self.cardContainer(for: view)
+            let card: UIView? = showsProviderFooter ? nil : Self.cardContainer(for: view)
             if !showsProviderFooter,
                card == nil,
                claimsToBeLyrics,
                !isKnownLyricsContent {
-                logRejectionThrottled(
+                Self.logRejectionThrottled(
                     "[WordByWord] ⚠️ preview host rejected — no card and foreign lyrics view"
                         + " (\(className)) — will retry"
                 )
