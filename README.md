@@ -4,10 +4,11 @@ This repository is independently maintained by me and is not affiliated with who
 
 The contents of this repository will be updated when EeveeSpotify-ng or EeveeSpotifyReincarnated is updated (within two weeks of the aforementioned repositories releasing a new version).
 
- Version
-Latest public release None
-Current development version v0.1.0-beta.1
-Development version last updated 2026/09/18
+| | Version |
+| --- | --- |
+| Latest public release | None |
+| Current development version | [v0.1.0-beta.1(build 19)](CHANGELOG.md)|
+| Development version last updated | 2026/09/18 |
 
 ⚠️ Notice
 
