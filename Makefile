@@ -46,4 +46,4 @@ internal-stage::
 # this once before `make package`. Re-run if SWIFTPROTOBUF_VERSION changes
 # or `swift --version` jumps a major.
 build-eeveeswiftprotobuf:
-	Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
+	bash Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
