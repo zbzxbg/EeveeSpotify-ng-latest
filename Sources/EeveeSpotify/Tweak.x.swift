@@ -352,8 +352,8 @@ struct EeveeSpotify: Tweak {
         // CarPlay crash fix (Issue #16) — safe-gated
         activateCarPlayCrashFix()
 
-        // Hysan's Elsa Recovery Fund: tappable donation toast on 5th launch
-        Donation.activate()
+        // （已移除：Reincarnated 自带的开屏捐赠彩蛋 Donation.activate()
+        //   —— "Hysan's Elsa Recovery Fund"，第 5/10 次启动弹 toast）
 
         // Verify critical hook targets exist
         let hookTargets: [(String, String)] = [
