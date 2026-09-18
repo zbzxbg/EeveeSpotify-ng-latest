@@ -1,0 +1,33 @@
+[
+    {
+        "title": "Development",
+        "shuffled": false,
+        "contributors": [
+            {
+                "username": "zbzxbg",
+                "roles": [
+                    "Maintainer",
+                    "Developer"
+                ]
+            },
+            {
+                "username": "whoeevee",
+                "roles": [
+                    "Original Creator",
+                    "Former Developer"
+                ]
+            },
+            {
+                "username": "asdfzxcvbn",
+                "roles": [
+                    "Former Collaborator"
+                ]
+            }
+        ]
+    },
+    {
+        "title": "Localization",
+        "shuffled": true,
+        "contributors": []
+    }
+]

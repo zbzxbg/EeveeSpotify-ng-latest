@@ -1,0 +1,163 @@
+/* MARK: Settings */
+
+patching = "Patching";
+lyrics = "Lyrics";
+customization = "Customization";
+experiments = "Experiments";
+
+common_issues_tip_title = "Having Trouble?";
+
+common_issues_tip_message = "If you are facing an issue, such as being unable to play any songs, check out";
+common_issues_tip_button = "Common Issues";
+
+reset_data = "Reset Data";
+reset_data_description = "Clear cached data and restart the app.";
+
+checking_for_update = "Checking for Update...";
+update_available = "Update Available";
+
+restart_is_required_description = "App restart is required after changing.";
+
+// Patching
+
+do_not_patch_premium = "Do Not Patch Premium";
+patching_description = "EeveeSpotify intercepts requests to load user data, deserializes it, and modifies the parameters in real-time.
+
+If you have an active Premium subscription, you can turn on Do Not Patch Premium. The tweak won't patch the data or restrict the use of Premium server-sided features.
+
+A restart is required after changing.";
+
+overwrite_configuration = "Overwrite Configuration";
+overwrite_configuration_description = "Replace the remote configuration with the dumped Premium one. It isn't guaranteed to work, but it can solve problems such as ads appearing.";
+
+// Lyrics
+
+do_not_replace_lyrics = "Disable Lyrics Replacement";
+do_not_replace_lyrics_description = "When this option is enabled, the custom lyrics feature is disabled, but Spotify is not prevented from returning its own lyrics.";
+lyrics_source = "Lyrics Source";
+lyrics_source_description = "Genius: Offers the widest song coverage, but the lyrics are not time-synced.
+LRCLIB: The most open service, offering time-synced lyrics. However, it lacks lyrics for many songs.
+Musixmatch: Provides time-synced lyrics for many songs, but you'll need a user token to use this source.";
+lyrics_additional_info = "Genius, NetEase, and PetitLyrics use fuzzy search, so some songs may have display errors or fail to find lyrics.";
+petitlyrics_description = "PetitLyrics: Provides Japanese lyrics.";
+spicylyrics_description = "SpicyLyrics: Provides word-by-word lyrics and lyrics that some other lyrics sources do not have. Visit spicylyrics.org for more details.";
+netease_description = "NetEase: Most lyrics come with timestamps. However, support for users outside mainland China is weaker, and timestamps may be misaligned.";
+amll_description = "AMLL: Provides high-quality word-by-word lyrics and rich lyrics structure. Visit amll.dev for more details.";
+
+musixmatch_user_token = "Musixmatch User Token";
+user_token_placeholder = "Enter User Token or Paste Debug Info";
+
+ngzhwm_amll_preferred = "Prefer AMLL";
+ngzhwm_amll_preferred_description = "For this option to take effect, word-by-word lyrics must be enabled. When enabled, word-by-word lyrics are requested from AMLL first. If AMLL does not return word-by-word lyrics, it falls back to the lyrics source you selected yourself and that source's related settings. With this option enabled, lyrics no longer show lyric translations.";
+
+genius_fallback = "Genius Fallback";
+genius_fallback_description = "Load lyrics from Genius if there is a problem with %@.";
+
+hide_lyrics_on_error = "Hide Lyrics Module";
+hide_lyrics_on_error_description = "Hide the lyrics module if lyrics fail to load.";
+
+
+musixmatch_language = "Musixmatch Lyrics Language";
+musixmatch_language_description = "You can enter a 2-letter Musixmatch language code and view the lyrics translation, if there is one.";
+
+// UI
+
+lyrics_background_color_section = "Lyrics Background Color";
+lyrics_background_color_section_description = "If you turn on Display Original Colors, the lyrics will appear in the original Spotify colors for tracks that have them.
+
+You can set a static color or a normalization factor based on the extracted track cover's color. This factor determines how much dark colors are lightened and light colors are darkened. Generally, you will see lighter colors with a higher normalization factor.";
+
+display_original_colors = "Display Original Colors";
+
+use_static_color = "Use Static Color";
+static_color = "Static Color";
+
+color_normalization_factor = "Color Normalization Factor";
+dark_popups = "Dark PopUps";
+
+// Experiments
+
+show_instagram_destination = "Show Instagram Destination";
+show_instagram_destination_description = "Always use Instagram as the share destination. A restart is required after changing.";
+
+livecontainer_sharing = "Share to LiveContainer";
+livecontainer_sharing_description = "Share to LiveContainer and copy the URL if the selected destination is not supported.";
+
+/* MARK: Premium PopUps */
+
+have_premium_popup = "It looks like you have an active Premium subscription, so the tweak won't patch the data or restrict the use of Premium server-sided features. You can manage this in the EeveeSpotify settings.";
+
+high_audio_quality_popup = "Very high audio quality is server-sided and is not available with this tweak.";
+playlist_downloading_popup = "Native playlist downloading is server-sided and is not available with this tweak. You can download podcast episodes though.";
+download_local_playlist = "Download local playlist";
+
+//
+
+could_not_share_popup = "Couldn’t share to the selected destination or LiveContainer. The URL has been copied.";
+
+/* MARK: Lyrics */
+
+musixmatch_unauthorized_popup = "The tweak is unable to load lyrics from Musixmatch due to Unauthorized error. Please check or update your Musixmatch token. If you use an iPad, you should get the token from the Musixmatch app for iPad.";
+musixmatch_restricted_popup = "The tweak is unable to load lyrics from Musixmatch because they are restricted. It's likely a copyright issue due to the US IP address, so you should change it if you're in the US or use a VPN.";
+
+// Instrumental Titles
+
+song_is_instrumental = "This song is instrumental.";
+let_the_music_play = "♪";
+
+// liked songs title, should match official spotify loc
+
+liked_songs = "Liked songs";
+
+contributors = "Contributors";
+Developement = "Developers";
+Localization = "Localization";
+
+request_anonymous_token = "Request Anonymous Token";
+
+lrclib_api = "Server Address";
+
+// Snapshot of your benefits, should match official spotify loc
+
+ad_free_music_listening = "Ad-free music listening";
+play_songs_in_any_order = "Play songs in any order";
+organize_listening_queue = "Organize listening queue";
+
+payment_notice = "EeveeSpotify applies patches to unlock certain Premium features. It's free.";
+
+
+// ngzhwm
+
+ngzhwm_title = "ngzhwm's Exclusive Features";
+ngzhwm_disable_lyrics_feature = "Disable Lyrics Function";
+ngzhwm_disable_lyrics_feature_description = "When this option is enabled, all features related to custom lyrics are disabled. It also prevents Spotify from returning its built-in lyrics.";
+ngzhwm_word_by_word_lyrics = "Enable Word-by-Word Lyrics";
+ngzhwm_word_by_word_lyrics_description = "Musixmatch, PetitLyrics, SpicyLyrics, NetEase, and AMLL provide word-by-word lyrics services.";
+ngzhwm_better_word_by_word_lyrics = "Better Word-by-Word Lyrics";
+ngzhwm_better_word_by_word_lyrics_description = "Just like Apple Music, requires iOS 26 at minimum. Lyric translations are not shown when enabled.";
+word_by_word_lyrics_provider = "Word-by-word Lyrics provider: %@";
+ngzhwm_multi_level_fallback = "Multi-level Fallback";
+ngzhwm_multi_level_fallback_description = "Multi-level Fallback: lyrics are searched through multiple providers in this order: Musixmatch → PetitLyrics → LRCLIB → Genius. Musixmatch and PetitLyrics are given up to 5 seconds each, while LRCLIB and Genius are given up to 3 seconds each; if a provider has not returned lyrics within its time limit, the next provider is queried.";
+ngzhwm_netease_romaji_local = "Modify How NetEase Japanese Romaji Is Displayed";
+ngzhwm_netease_romaji_local_description = "For this option to take effect, \"Romanize Japanese Lyrics\" must be enabled. When this option is enabled, NetEase's Japanese romaji is handled by local Japanese romanization instead of being handed to NetEase. If NetEase returns word-by-word lyrics, this option has no effect.";
+ngzhwm_netease_hide_translation = "Hide NetEase Translation Button";
+ngzhwm_netease_hide_translation_description = "When enabled, the NetEase lyrics source will not display the lyrics translation button.";
+ngzhwm_romanization_description = "Configure romanization separately for each language. If romanization is not enabled for a language, its lyrics are displayed as-is without romanization.";
+ngzhwm_chinese_romanization = "Romanize Chinese Lyrics";
+ngzhwm_japanese_romanization = "Romanize Japanese Lyrics";
+ngzhwm_korean_romanization = "Romanize Korean Lyrics";
+ngzhwm_remove_interlude_symbol = "Delete Interlude Symbol \"♪\"";
+ngzhwm_remove_interlude_symbol_description = "When this option is enabled, the interlude symbol \"♪\" is removed from lyrics, and lines containing \"♪\" are displayed as blank.";
+// Debug
+
+debug_title = "Debug";
+enable_log_recording = "Enable Log Recording";
+enable_log_recording_description = "There's no need to enable log recording for normal use.";
+export_debug_log = "Export Debug Log";
+clear_debug_log = "Clear Debug Log";
+debug_log_cleared = "Debug log cleared.";
+debug_log_cleared_ok = "OK";
+no_debug_log_found = "No debug log found.";
+no_debug_log_found_ok = "OK";
+no_log_to_clear = "There's no log to clear.";
+no_log_to_clear_ok = "OK";

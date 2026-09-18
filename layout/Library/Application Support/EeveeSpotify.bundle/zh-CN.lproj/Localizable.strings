@@ -1,0 +1,157 @@
+/* MARK: Settings */
+
+patching = "补丁";
+lyrics = "歌词";
+customization = "定制";
+experiments = "实验";
+
+common_issues_tip_title = "发现问题？";
+
+common_issues_tip_message = "如果遇到问题，例如无法播放任何歌曲，请查看";
+common_issues_tip_button = "常见问题";
+
+reset_data = "重置数据";
+reset_data_description = "清除缓存数据并重新启动应用程序。";
+
+checking_for_update = "正在检查更新...";
+update_available = "发现可用更新";
+
+restart_is_required_description = "更改后需要重启应用程序。";
+
+// Patching
+
+do_not_patch_premium = "不启用 Premium 补丁";
+patching_description = "拦截加载用户数据的请求，对其进行反序列化，并实时修改参数。\n\n如果您拥有真实有效的 Premium 订阅，则可以启用“不启用 Premium 补丁”。该插件不会修补数据或限制 Premium 服务器端功能的使用。更改后需要重新启动应用。";
+
+overwrite_configuration = "覆盖配置";
+overwrite_configuration_description = "用转存的 Premium 配置替换远程配置。虽然不保证一定有效，但可以解决出现广告之类的问题。";
+
+// Lyrics
+
+do_not_replace_lyrics = "禁用歌词替换功能";
+do_not_replace_lyrics_description = "选项开启后会禁用自定义歌词功能，但不会阻止Spotify返回其自带的歌词。";
+lyrics_source = "歌词来源";
+lyrics_source_description = "Genius：歌词覆盖面最广，但歌词没有时间轴。\nLRCLIB：最开放的服务，提供带时间轴的歌词。但它缺少很多歌曲的歌词。\nMusixmatch：为很多歌曲提供带时间轴的歌词，但需要用户令牌才能使用。";
+lyrics_additional_info = "Genius，NetEase和PetitLyrics的搜索方式是模糊搜索，所以部分歌曲可能会出现歌词显示错误或搜索不到歌词的情况。";
+petitlyrics_description = "PetitLyrics：提供日语歌词。";
+spicylyrics_description = "SpicyLyrics：提供逐词歌词及部分其他歌词来源没有的歌词。具体介绍可前往spicylyrics.org查看。";
+netease_description = "NetEase：歌词大部分带时间轴。但对非中国大陆用户的支持较差，且可能出现时间轴不对齐等情况。";
+amll_description = "AMLL：提供高质量逐词歌词和丰富的歌词结构。具体介绍可前往amll.dev查看。";
+
+musixmatch_user_token = "Musixmatch 用户令牌";
+user_token_placeholder = "输入用户令牌或粘贴调试信息";
+
+
+ngzhwm_amll_preferred = "AMLL优先";
+ngzhwm_amll_preferred_description = "选项生效需要开启逐词歌词。选项开启后会优先向AMLL请求逐词歌词。如果AMLL未返回逐词歌词，则回退用户自己选择的歌词来源和相关设置进行请求。目前开启该选项后，歌词将不展示歌词翻译。";
+
+genius_fallback = "Genius回退";
+genius_fallback_description = "如果 %@ 有问题，将使用 Genius 加载歌词。";
+
+hide_lyrics_on_error = "隐藏歌词模块";
+hide_lyrics_on_error_description = "如果歌词加载失败，则隐藏歌词模块。";
+
+
+musixmatch_language = "Musixmatch 歌词语言";
+musixmatch_language_description = "可以输入两个字母的 Musixmatch 语言代码，并查看歌词翻译（如果有歌词翻译的话）。";
+
+// UI
+
+lyrics_background_color_section = "歌词背景颜色";
+lyrics_background_color_section_description = "如果打开 “原始颜色”，歌词将以 Spotify 的默认颜色显示。\n\n也可以根据提取的曲目封面的颜色设置 “静态颜色” 或 “标准颜色”。颜色标准参数决定深色变浅的程度以及浅色变暗的程度。通常，标准参数越高，看到的颜色越浅。";
+
+display_original_colors = "显示原始颜色";
+
+use_static_color = "使用静态颜色";
+static_color = "静态颜色";
+
+color_normalization_factor = "颜色标准参数";
+dark_popups = "深色弹窗";
+
+
+// Experiments
+
+show_instagram_destination = "显示 Instagram 分享目标";
+show_instagram_destination_description = "始终将 Instagram 作为分享目标，更改需要重启程序。";
+
+livecontainer_sharing = "分享到 LiveContainer";
+livecontainer_sharing_description = "如果不支持所选分享目标，则分享到 LiveContainer 并复制 URL。";
+
+/* MARK: Premium PopUps */
+
+have_premium_popup = "看来您有一个真实有效的 Premium 订阅，因此此插件不会修补数据或限制 Premium 服务器端功能的使用。可以在 EeveeSpotify 设置中管理此操作。";
+
+high_audio_quality_popup = "超高这个播放品质是服务器端的功能，无法通过此插件获得。";
+playlist_downloading_popup = "原生播放列表下载是服务器端的功能，无法通过此插件下载。不过可以下载播客节目。";
+download_local_playlist = "下载本地播放列表";
+
+//
+
+could_not_share_popup = "无法分享到所选目标或 LiveContainer，URL 已复制。";
+
+/* MARK: Lyrics */
+
+
+musixmatch_unauthorized_popup = "由于未授权错误，该插件无法从 Musixmatch 加载歌词。请检查或更新 Musixmatch 令牌。如果使用 iPad，则应从 iPad 版 Musixmatch 应用中获取令牌。";
+musixmatch_restricted_popup = "由于受到限制，该插件无法加载 Musixmatch 的歌词。这可能是由于美国 IP 地址导致的版权问题，因此如果在美国，则应更改地址（例如使用VPN）。";
+
+// Instrumental Titles
+
+song_is_instrumental = "此歌曲为纯音乐。";
+let_the_music_play = "♪";
+
+// liked songs title, should match official spotify loc
+liked_songs = "喜欢的歌曲";
+
+contributors = "参与者";
+Developement = "开发者";
+Localization = "本地化翻译";
+
+request_anonymous_token = "请求匿名令牌";
+
+lrclib_api = "服务器地址";
+
+// Snapshot of your benefits, should match official spotify loc
+
+ad_free_music_listening = "无广告聆听音乐";
+play_songs_in_any_order = "以任意顺序播放歌曲";
+organize_listening_queue = "整理播放队列";
+
+payment_notice = "EeveeSpotify 已应用补丁来解锁部分高级功能，免费使用。";
+
+
+// ngzhwm
+
+ngzhwm_title = "ngzhwm的专属功能";
+ngzhwm_disable_lyrics_feature = "禁用歌词功能";
+ngzhwm_disable_lyrics_feature_description = "选项开启后会禁用有关于自定义歌词的所有功能。还会阻止Spotify返回其自带的歌词。";
+ngzhwm_word_by_word_lyrics = "开启逐词歌词";
+ngzhwm_word_by_word_lyrics_description = "Musixmatch，PetitLyrics，SpicyLyrics，NetEase，AMLL提供逐词歌词服务。";
+ngzhwm_better_word_by_word_lyrics = "更好的逐词歌词";
+ngzhwm_better_word_by_word_lyrics_description = "像Apple Music那样，系统版本最低要求iOS26。选项开启后不会展示歌词翻译。";
+word_by_word_lyrics_provider = "逐词歌词提供者：%@";
+ngzhwm_multi_level_fallback = "多级回退";
+ngzhwm_multi_level_fallback_description = "多级回退:歌词将按照Mxm-PL-LRC-Gen的方式多级回退查询(Mxm和PL最长等待5秒，LRCLIB和Genius最长等待3秒；如果某个来源在对应时间内仍未返回有效歌词，则查询下一个来源)。";
+ngzhwm_netease_romaji_local = "修改NetEase日语罗马字的展示方式";
+ngzhwm_netease_romaji_local_description = "选项生效需要开启\"日语歌词罗马化\"。选项开启后NetEase的日语罗马字会交给本地日语罗马化处理，而不是交给NetEase。如果NetEase返回逐词歌词，此选项将不起作用。";
+ngzhwm_netease_hide_translation = "不展示NetEase的翻译按钮";
+ngzhwm_netease_hide_translation_description = "选项开启后NetEase歌词源不会显示歌词翻译按钮。";
+ngzhwm_romanization_description = "单独设置每种语言的歌词是否罗马化。如果某种语言的歌词未开启罗马化选项，该语言的歌词会直接显示，不进行罗马化。";
+ngzhwm_chinese_romanization = "中文歌词罗马化";
+ngzhwm_japanese_romanization = "日语歌词罗马化";
+ngzhwm_korean_romanization = "韩语歌词罗马化";
+ngzhwm_remove_interlude_symbol = "删除间奏符号「♪」";
+ngzhwm_remove_interlude_symbol_description = "选项开启时后会删除歌词内的间奏符号「♪」，有♪的这一行会显示空白。";
+// Debug
+
+debug_title = "调试";
+enable_log_recording = "开启日志记录";
+enable_log_recording_description = "平常使用无须开启日志记录功能。";
+export_debug_log = "导出调试日志";
+clear_debug_log = "清除调试日志";
+debug_log_cleared = "调试日志已清除。";
+debug_log_cleared_ok = "确定";
+no_debug_log_found = "未找到调试日志。";
+no_debug_log_found_ok = "确定";
+no_log_to_clear = "无任何日志需要清除。";
+no_log_to_clear_ok = "确定";
