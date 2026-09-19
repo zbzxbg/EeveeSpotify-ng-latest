@@ -120,8 +120,20 @@ jobs:
           fi
 
           unzip -q "$RUNNER_TEMP/Orion.zip" -d "$RUNNER_TEMP/orion"
-          FW=$(find "$RUNNER_TEMP/orion" -maxdepth 3 -type d -name 'Orion.framework' | head -1)
-          [ -n "$FW" ] || { echo "::error::Orion.zip 里找不到 Orion.framework"; exit 1; }
+
+          # ⚠️ 必须排除 __MACOSX：这份 zip 是在 macOS 上打的，带 AppleDouble
+          # 元数据目录，里面同样有一个 `__MACOSX/Orion.framework`（只有 `._Orion`，
+          # 没有真正的 `Orion`）。`find` 的遍历顺序会让它先命中，于是后面
+          # "没有 Orion 这个二进制" 直接 fail —— 实测踩过。
+          rm -rf "$RUNNER_TEMP/orion/__MACOSX"
+
+          FW=$(find "$RUNNER_TEMP/orion" -maxdepth 3 -type d -name 'Orion.framework' \
+                 -not -path '*__MACOSX*' | head -1)
+          [ -n "$FW" ] || {
+            echo "::error::Orion.zip 里找不到 Orion.framework。解出来的结构："
+            find "$RUNNER_TEMP/orion" -maxdepth 3 | sed 's|^|  |'
+            exit 1
+          }
 
           BIN="$FW/Orion"
           [ -f "$BIN" ] || { echo "::error::$FW 里没有 Orion 这个二进制"; exit 1; }
