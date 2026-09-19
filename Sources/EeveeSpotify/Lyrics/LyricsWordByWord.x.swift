@@ -198,6 +198,59 @@ func hasUsableWordLevelData(_ dto: LyricsDto?) -> Bool {
     return wordLevelLines * 10 >= lines.count * 5  // >= 50%
 }
 
+/// 逐词歌词层的**纯色底色**（"只开逐词歌词、没开更好的逐词歌词"那条路用作背景）。
+///
+/// 优先级与旧 overlay 原来的取色完全一致：
+///   1. `CustomLyrics` 最终写回的原生歌词底色（与模块头同色，保证两者一致）；
+///   2. 「定制」里的显示原始颜色 → 正在播放背景色；
+///   3. 「定制」里的静态色；
+///   4. 专辑提取色（按归一化因子调整）；
+///   5. 兜底灰。
+///
+/// 抽成文件级函数是因为它有**两个**消费者：旧 UIKit 层（iOS 26 以下）与
+/// 共用页面那条路的纯色背景 —— 取色逻辑必须只有一份。
+func wordByWordSolidBackgroundColor() -> UIColor {
+    if currentLyricsBackgroundColorARGB != 0 {
+        let argb = currentLyricsBackgroundColorARGB
+        let alphaByte = (argb >> 24) & 0xFF
+        return UIColor(
+            red: CGFloat((argb >> 16) & 0xFF) / 255,
+            green: CGFloat((argb >> 8) & 0xFF) / 255,
+            blue: CGFloat(argb & 0xFF) / 255,
+            alpha: alphaByte == 0 ? 1 : CGFloat(alphaByte) / 255
+        )
+    }
+
+    let settings = UserDefaults.lyricsColors
+
+    if settings.displayOriginalColors,
+       let original = backgroundViewModel?.color() {
+        return original.withAlphaComponent(1)
+    }
+
+    if settings.useStaticColor, !settings.staticColor.isEmpty {
+        return UIColor(Color(hex: settings.staticColor))
+    }
+
+    let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
+    let extractedHex: String? = {
+        switch EeveeSpotify.hookTarget {
+        case .lastAvailableiOS14: return track?.extractedColorHex()
+        default: return track?.metadata()["extracted_color"]
+        }
+    }()
+    if let hex = extractedHex {
+        return UIColor(Color(hex: hex).normalized(settings.normalizationFactor))
+    }
+
+    if let background = backgroundViewModel?.color() {
+        return UIColor(Color(background).normalized(settings.normalizationFactor))
+            .withAlphaComponent(1)
+    }
+
+    return .gray
+}
+
 private final class LineLabel: UILabel {
     var lineIndex = -1
 }
@@ -328,46 +381,19 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             frame = CGRect(origin: .zero, size: host.bounds.size)
         }
 
-        // 上下淡出带。
+        // 上下淡出带（含"壳下面那两块铺底"）。
         //
-        // 有壳时**用与新层同一套停靠点**（`AppleMusicLyricsPage.fadeMaskStops` 的口径）：
-        //   · 上：从「标题栏顶部」透明 → 到「标题栏底部」完全不透明；
-        //   · 下：从「控件栏上方 fadeBottomBand」完全不透明 → 到「控件栏顶部」透明。
-        // 以前是"安全区往下 48pt"的一小条，位置和宽度都跟新层对不上，看着很脏。
+        // 有壳时不再是"一小条淡出"就完事：
+        //   · 上：从屏幕顶到**标题栏下沿**整块铺底色，只在最下面 `fadeBottomBand`
+        //     范围内做淡入 —— 这样淡入正好落在"歌手下方"，标题/歌手背后是干净的底色；
+        //   · 下：从**控件栏顶部**到底部整块铺底色，往上 `fadeBottomBand` 做淡出 ——
+        //     进度条/时间/三键背后同样是干净的底色。
         //
-        // ⚠️ 安全区一律用 `resolvedSafeAreaInsets`（**窗口的**）：全屏页里我们挂在
-        // `vc.view` 上，自己算出来的安全区是 0，用它会得到"上淡出贴屏幕最顶端、
-        // 下淡出压到进度条上"——就是真机反馈的那两条。
-        let insets = resolvedSafeAreaInsets
-        let fadeHeight: CGFloat = bounds.height < 420 ? 28 : 48
-        let topFadeTop: CGFloat
-        let topFadeHeight: CGFloat
-        let bottomFadeBottom: CGFloat
-        let bottomFadeHeight: CGFloat
-        if showsPlaybackControls {
-            let topClear = insets.top + LyricsShellLayout.headerTopInset
-            let topOpaque = insets.top + LyricsShellLayout.headerHeight
-            topFadeTop = topClear
-            topFadeHeight = max(topOpaque - topClear, 1)
-            bottomFadeBottom = bounds.height - (max(insets.bottom, 8) + LyricsShellLayout.footerHeight)
-            bottomFadeHeight = LyricsShellLayout.fadeBottomBand
-        } else {
-            // 预览：**用本地的**安全区（卡片内部是 0）。窗口的 59/34 只属于全屏那一页，
-            // 拿来算卡片里的淡出带会把整条带子推到卡片下面去。
-            topFadeTop = safeAreaInsets.top
-            topFadeHeight = fadeHeight
-            bottomFadeBottom = bounds.height - safeAreaInsets.bottom
-            bottomFadeHeight = fadeHeight
-        }
-        topFadeView.frame = CGRect(x: 0, y: topFadeTop, width: bounds.width, height: topFadeHeight)
-        topFadeLayer.frame = topFadeView.bounds
-        bottomFadeView.frame = CGRect(
-            x: 0,
-            y: bottomFadeBottom - bottomFadeHeight,
-            width: bounds.width,
-            height: bottomFadeHeight
-        )
-        bottomFadeLayer.frame = bottomFadeView.bounds
+        // 真机截图实证（修之前）：只铺一条 40pt 的淡出带，壳本身没有背景，
+        // 于是歌词直接从标题、进度条和三键底下穿过去 —— 三键压在一行歌词上。
+        // 安全区用 `resolvedSafeAreaInsets`（窗口的）：全屏页里我们挂在 `vc.view` 上，
+        // 自己那份是 0，用它会得到"淡入贴屏幕最顶端、淡出压到进度条上"。
+        updateFadeLayers()
 
         // 折行宽度**显式**告诉每个 label。
         //
@@ -383,6 +409,22 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
 
         // 有壳时歌词的上下留白要跟着安全区 + 壳的高度走（旋转 / 换设备都要跟着变）。
         updateLyricsInsetsIfNeeded()
+
+        // 几何诊断：歌词面板 + 淡出带的实际停靠点。
+        //
+        // ⚠️ 这一行是排查"淡入/淡出位置不对"的**唯一**依据 ——
+        // 把上下淡出带、壳的实际占位、窗口安全区一次打全：
+        //   `fade=` 那两段是**绝对 y**，直接和截图里"歌手下方 / 进度条上沿"对得上。
+        let fadeSummary = "top[\(Int(topFadeView.frame.minY))..\(Int(topFadeView.frame.maxY))]"
+            + " bottom[\(Int(bottomFadeView.frame.minY))..\(Int(bottomFadeView.frame.maxY))]"
+        if fadeSummary != lastLoggedFadeSummary {
+            lastLoggedFadeSummary = fadeSummary
+            writeDebugLog(
+                "[WordByWord] legacy fades \(fadeSummary)"
+                    + " insets=(\(Int(resolvedSafeAreaInsets.top)),\(Int(resolvedSafeAreaInsets.bottom)))"
+                    + " shell=\(showsPlaybackControls) hidden=(\(topFadeView.isHidden),\(bottomFadeView.isHidden))"
+            )
+        }
 
         // 尺寸变化时打一条（排查"挂上了但大小/换行不对"用；不随每帧刷屏）。
         if bounds.size != lastLoggedSize {
@@ -434,10 +476,64 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     /// 上一次设置过的折行宽度 / 上一次打过日志的尺寸（都是"变了才动"的缓存）。
     private var lastWrapWidth: CGFloat = -1
     private var lastLoggedSize: CGSize = .zero
+    private var lastLoggedFadeSummary: String = ""
 
     /// 当前应当使用的折行宽度（= 我们宽度 − 左右边距）。
     private var currentWrapWidth: CGFloat {
         max(bounds.width - 2 * lyricsSideInset, 1)
+    }
+
+    /// 淡出带（scrim）的几何 + 颜色 + 渐变停靠点。
+    ///
+    /// ⚠️ 颜色与 `locations` 必须**成对、在同一处**设置：`CAGradientLayer` 要求两者
+    /// 数量一致，一处只设 colors、另一处只设 locations 会画出花屏甚至直接崩。
+    /// 所以这里统一算，`configureBackdropIfNeeded` 只负责把底色算出来。
+    private func updateFadeLayers() {
+        let base = resolvedBackgroundColor ?? .black
+        let clear = base.withAlphaComponent(0)
+
+        guard showsPlaybackControls else {
+            // 预览：卡片内部没有壳，上下各一小条渐隐就够了。
+            let band: CGFloat = bounds.height < 420 ? 28 : 48
+            let insets = safeAreaInsets
+            topFadeView.frame = CGRect(x: 0, y: insets.top, width: bounds.width, height: band)
+            topFadeLayer.colors = [base.cgColor, clear.cgColor]
+            topFadeLayer.locations = [0, 1]
+            bottomFadeView.frame = CGRect(
+                x: 0,
+                y: bounds.height - insets.bottom - band,
+                width: bounds.width,
+                height: band
+            )
+            bottomFadeLayer.colors = [clear.cgColor, base.cgColor]
+            bottomFadeLayer.locations = [0, 1]
+            return
+        }
+
+        let insets = resolvedSafeAreaInsets
+        let band = LyricsShellLayout.fadeBottomBand
+
+        // 上：0 → 标题栏下沿整块铺底色，最后 `band` 做淡入（淡入落在歌手下方）。
+        let headerBottom = max(insets.top + LyricsShellLayout.headerHeight, 1)
+        topFadeView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: headerBottom)
+        topFadeLayer.colors = [base.cgColor, base.cgColor, clear.cgColor]
+        let topStop = min(max(Double(max(headerBottom - band, 0) / headerBottom), 0), 1)
+        topFadeLayer.locations = [0, NSNumber(value: topStop), 1]
+
+        // 下：控件栏顶部**上方** `band` 做淡出，控件栏整块（进度条 + 时间 + 三键）铺底色。
+        //
+        // 停靠点用的是新层那套名义值 `height − (安全区 + 116)`：它正好落在**进度条上沿之上**
+        // （控件实际内容在它下面约 16pt），所以"淡出停在进度条上方"。
+        let footerTop = min(
+            bounds.height - (max(insets.bottom, 8) + LyricsShellLayout.footerHeight),
+            bounds.height
+        )
+        let fadeStart = max(footerTop - band, 0)
+        let span = max(bounds.height - fadeStart, 1)
+        bottomFadeView.frame = CGRect(x: 0, y: fadeStart, width: bounds.width, height: span)
+        bottomFadeLayer.colors = [clear.cgColor, base.cgColor, base.cgColor]
+        let bottomStop = min(max(Double(band / span), 0), 1)
+        bottomFadeLayer.locations = [0, NSNumber(value: bottomStop), 1]
     }
 
     /// 设置背景样式：全屏传 `.stage`（溢出铺满整屏、均匀暗化），
@@ -998,7 +1094,7 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         // 要把影响外观的几项一起编进 key。
         let key = backdropKey()
         let changed = resolvedBackgroundColor == nil || resolvedBackdropKey != key
-        let targetBackground = changed ? overlayBackgroundColor() : (resolvedBackgroundColor ?? .black)
+        let targetBackground = changed ? wordByWordSolidBackgroundColor() : (resolvedBackgroundColor ?? .black)
 
         if changed {
             resolvedBackgroundColor = targetBackground
@@ -1010,14 +1106,9 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             if changed {
                 backdropView.isHidden = true
                 backgroundColor = targetBackground
-                topFadeLayer.colors = [
-                    targetBackground.cgColor,
-                    targetBackground.withAlphaComponent(0).cgColor
-                ]
-                bottomFadeLayer.colors = [
-                    targetBackground.withAlphaComponent(0).cgColor,
-                    targetBackground.cgColor
-                ]
+                // 渐隐层的颜色/停靠点由 `updateFadeLayers()` 统一设置
+                // （颜色与 locations 必须成对，见那里）—— 这里只让它重算一次。
+                setNeedsLayout()
             }
             // 纯色兜底：沿用改动前的黑字约定（传 nil）。
             if resolveTextColors(isDarkSurface: nil) {
@@ -1035,16 +1126,8 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
                 showsArtwork: true,
                 material: NgzhwmSettingsViewModel.isLyricsBackdropMaterialEnabled
             )
-            // 渐变遮罩仍用纯色：它只负责让滚进/滚出视口的歌词渐隐，用底色即可。
-            let fadeBase = resolvedBackgroundColor ?? targetBackground
-            topFadeLayer.colors = [
-                fadeBase.cgColor,
-                fadeBase.withAlphaComponent(0).cgColor
-            ]
-            bottomFadeLayer.colors = [
-                fadeBase.withAlphaComponent(0).cgColor,
-                fadeBase.cgColor
-            ]
+            // 渐隐层同样交给 `updateFadeLayers()`（底色变了要重算一次）。
+            setNeedsLayout()
             // 自身保持透明，否则会把 backdropView 盖住。
             backgroundColor = .clear
         }
@@ -1056,55 +1139,9 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
 
     // MARK: 背景取色（跟随「定制」选项）
 
-    /// 与 CustomLyrics 里原生日志歌词的取色逻辑一致：
-    /// 显示原始颜色 → 正在播放背景色；静态色 → 用户所选；
-    /// 否则专辑提取色/播放背景色按归一化因子调整；都没有 → 灰。
-    private func overlayBackgroundColor() -> UIColor {
-        // 优先用 CustomLyrics 最终写回的原生歌词背景色（与模块头同色，保证两者一致）；
-        // 尚未就绪（== 0）时回退到旧的取色链路。
-        if currentLyricsBackgroundColorARGB != 0 {
-            let argb = currentLyricsBackgroundColorARGB
-            let alphaByte = (argb >> 24) & 0xFF
-            return UIColor(
-                red: CGFloat((argb >> 16) & 0xFF) / 255,
-                green: CGFloat((argb >> 8) & 0xFF) / 255,
-                blue: CGFloat(argb & 0xFF) / 255,
-                alpha: alphaByte == 0 ? 1 : CGFloat(alphaByte) / 255
-            )
-        }
-
-        let settings = UserDefaults.lyricsColors
-
-        if settings.displayOriginalColors,
-           let original = backgroundViewModel?.color() {
-            return original.withAlphaComponent(1)
-        }
-
-        if settings.useStaticColor, !settings.staticColor.isEmpty {
-            return UIColor(Color(hex: settings.staticColor))
-        }
-
-        if let hex = currentTrackExtractedColorHex() {
-            return UIColor(Color(hex: hex).normalized(settings.normalizationFactor))
-        }
-
-        if let background = backgroundViewModel?.color() {
-            return UIColor(Color(background).normalized(settings.normalizationFactor))
-                .withAlphaComponent(1)
-        }
-
-        return .gray
-    }
-
-    private func currentTrackExtractedColorHex() -> String? {
-        let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
-        switch EeveeSpotify.hookTarget {
-        case .lastAvailableiOS14:
-            return track?.extractedColorHex()
-        default:
-            return track?.metadata()["extracted_color"]
-        }
-    }
+    // 取色逻辑已抽成文件级 `wordByWordSolidBackgroundColor()`：
+    // 旧 UIKit 层（iOS 26 以下）与"只开逐词歌词"那条路的纯色背景共用同一份，
+    // 两处各写一遍必然慢慢跑偏（这个文件里已经吃过好几次这种亏）。
 
     // MARK: 手动滚动打断自动跟随
 
@@ -1117,9 +1154,20 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         updateFadeVisibility()
     }
 
-    /// 顶部渐隐在歌词未滚动（在顶部）时隐藏，保证第一行不被遮挡；
-    /// 底部渐隐在歌词滚到底部时隐藏，保证最后一行/提供者不被遮挡。
+    /// 顶部/底部渐隐层的显隐。
+    ///
+    /// ⚠️ 有壳时**永远显示**：这两条现在不是"首尾行的装饰"，而是歌词与壳之间的过渡，
+    /// 同时也是壳的底色（见 `updateFadeLayers`）。一藏起来，标题栏和控件栏就会直接
+    /// 压在清晰的歌词上 —— 真机截图实证：三键压在一行歌词上、歌曲名和第一行重叠。
+    ///
+    /// 预览（无壳）保持原来的行为：歌词在顶部/底部时隐藏，保证首尾行不被遮挡。
     private func updateFadeVisibility() {
+        guard !showsPlaybackControls else {
+            topFadeView.isHidden = stackView.isHidden
+            bottomFadeView.isHidden = stackView.isHidden
+            return
+        }
+
         let atTop = scrollView.contentOffset.y <= 1
         let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
         let atBottom = scrollView.contentOffset.y >= maxY - 1
@@ -1391,7 +1439,11 @@ final class WordByWordHost {
         let usable = hasUsableWordLevelData(currentLyricsDto)
 
         // 系统版本够、开关打开、数据可用 → 走 Apple Music 渲染层。
-        // 三个条件缺一就走下面的 UIKit 旧实现，行为与改动前完全一致。
+        //
+        // ⚠️ 这里**必须**保留「更好的逐词歌词」这一条判据：
+        // 两条路是**两套歌词渲染**（高亮/闪烁/译文处理都不同），
+        // 用户要的只是"壳的观感一致"，不是"把歌词也换掉"——
+        // 曾经试过让旧层也走新页面（连歌词一起换），被退回来了。
         if #available(iOS 26.0, *),
            usable,
            NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled {
