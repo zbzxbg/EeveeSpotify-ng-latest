@@ -11,7 +11,7 @@ This repository is independently maintained by me and is not affiliated with who
 
 ## ⚠️ Notice
 
-- It is recommended that you first familiarize yourself with the following three versions of Spotify before using this project:
+- It is recommended that you first familiarize yourself with the following two versions of Spotify before using this project:
   1. EeveeSpotify-ng 9.1.0 (from the EeveeSpotify-ng project)
   2. SideloadLabs' EeveeSpotifyReincarnated
 - Verified environment: iPhone 11 · iOS 27.0 · certificate-signed build · LCSign · rootless DEB.
