@@ -556,26 +556,52 @@ final class AppleMusicLyricsPlaybackProjection: ObservableObject {
     private let positionProvider: () -> TimeInterval?
     private var lastTime: TimeInterval?
     private var lastDurationRefresh: Date = .distantPast
+    /// 位置累计前进的判定锚点与"最后一次确认前进"的时间（见 `refresh` 里的滞后逻辑）。
+    private var advanceAnchor: TimeInterval?
+    private var lastAdvanceAt: Date?
+    /// 累计前进多少秒才算"在播"：比采样抖动大一个量级即可。
+    private static let advanceThreshold: TimeInterval = 0.05
+    /// 多久没有累计前进才算"暂停"（宽松一点，避免 seek/卡顿瞬间闪图标）。
+    private static let pauseThreshold: TimeInterval = 0.35
 
     init(positionProvider: @escaping () -> TimeInterval?) {
         self.positionProvider = positionProvider
     }
 
     /// 每帧调用。内部做阈值判断，值没实质变化就不发通知（避免每帧整壳重绘）。
+    ///
+    /// ⚠️ "是否在播放"用**滞后**判断，别用"这一帧比上一帧大"：
+    /// 播放位置每帧都带一点抖动（采样误差、播放器内部量化），
+    /// 一帧 ±1ms 就会让图标在两颗之间来回抽 —— 真机上就是"暂停键抽搐"。
+    /// 现在：
+    ///   · 相对锚点累计前进 ≥ `advanceThreshold` → 判定为播放中，并把锚点前移；
+    ///   · 连续 `pauseThreshold` 没有累计前进 → 判定为暂停。
     func refresh() {
         let newTime = positionProvider() ?? time
-        if abs(newTime - time) > 0.01 {
-            // 位置在推进 → 正在播放。注意：拖动进度条时位置也会跳，所以
-            // "正在播放"只用来选图标，不参与拖动逻辑。
-            isPlaying = newTime > time
-            time = newTime
+        time = newTime
+
+        let now = Date()
+        if let anchor = advanceAnchor {
+            let delta = newTime - anchor
+            if delta >= Self.advanceThreshold {
+                // 正常前进（播放中，或用户把进度往前拖）。
+                advanceAnchor = newTime
+                lastAdvanceAt = now
+                isPlaying = true
+            } else if delta <= -Self.advanceThreshold {
+                // 往回跳（上一首 / 往回拖）：重设锚点，但别据此判定"在播"。
+                advanceAnchor = newTime
+                lastAdvanceAt = now
+            }
         } else {
-            // 位置长时间不动 → 暂停（判据宽松一点：连续不动就是没在放）。
+            advanceAnchor = newTime
+        }
+
+        if isPlaying, let lastAdvanceAt, now.timeIntervalSince(lastAdvanceAt) > Self.pauseThreshold {
             isPlaying = false
         }
 
         // 时长不必每帧读（它一次播放内不变），1 秒刷一次足够。
-        let now = Date()
         if now.timeIntervalSince(lastDurationRefresh) > 1 {
             lastDurationRefresh = now
             if let ms = statefulPlayer?.currentTrack()?.trackDurationMilliseconds, ms > 0 {

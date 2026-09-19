@@ -255,13 +255,6 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     /// 换歌时要跟着变的壳文本。
     private var shellTitle: String = ""
     private var shellArtist: String = ""
-    /// 壳的边距/高度常数（与 `AppleMusicLyricsPage` 同一份，见 `LyricsShellLayout`）。
-    private var shellTopPadding: CGFloat {
-        LyricsShellLayout.headerHeight + LyricsShellLayout.contentTopInset
-    }
-    private var shellBottomPadding: CGFloat {
-        LyricsShellLayout.footerHeight + LyricsShellLayout.contentBottomInset
-    }
     /// 壳当前是否已按"可见"布置过（避免每帧重设约束常量）。
     private var controlsApplied: Bool?
     private var stackBottomConstraint: NSLayoutConstraint?
@@ -341,20 +334,26 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         //   · 上：从「标题栏顶部」透明 → 到「标题栏底部」完全不透明；
         //   · 下：从「控件栏上方 fadeBottomBand」完全不透明 → 到「控件栏顶部」透明。
         // 以前是"安全区往下 48pt"的一小条，位置和宽度都跟新层对不上，看着很脏。
+        //
+        // ⚠️ 安全区一律用 `resolvedSafeAreaInsets`（**窗口的**）：全屏页里我们挂在
+        // `vc.view` 上，自己算出来的安全区是 0，用它会得到"上淡出贴屏幕最顶端、
+        // 下淡出压到进度条上"——就是真机反馈的那两条。
+        let insets = resolvedSafeAreaInsets
         let fadeHeight: CGFloat = bounds.height < 420 ? 28 : 48
         let topFadeTop: CGFloat
         let topFadeHeight: CGFloat
         let bottomFadeBottom: CGFloat
         let bottomFadeHeight: CGFloat
         if showsPlaybackControls {
-            let topClear = safeAreaInsets.top + LyricsShellLayout.headerTopInset
-            let topOpaque = safeAreaInsets.top + LyricsShellLayout.headerHeight
+            let topClear = insets.top + LyricsShellLayout.headerTopInset
+            let topOpaque = insets.top + LyricsShellLayout.headerHeight
             topFadeTop = topClear
             topFadeHeight = max(topOpaque - topClear, 1)
-            bottomFadeBottom = bounds.height
-                - (max(safeAreaInsets.bottom, 8) + LyricsShellLayout.footerHeight)
+            bottomFadeBottom = bounds.height - (max(insets.bottom, 8) + LyricsShellLayout.footerHeight)
             bottomFadeHeight = LyricsShellLayout.fadeBottomBand
         } else {
+            // 预览：**用本地的**安全区（卡片内部是 0）。窗口的 59/34 只属于全屏那一页，
+            // 拿来算卡片里的淡出带会把整条带子推到卡片下面去。
             topFadeTop = safeAreaInsets.top
             topFadeHeight = fadeHeight
             bottomFadeBottom = bounds.height - safeAreaInsets.bottom
@@ -375,12 +374,15 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         // 栈的宽度约束本来已经给了宽度，但 label 不设 `preferredMaxLayoutWidth` 时，
         // 在某些布局时序上（宿主刚挂上、宽度还没收敛）会先按**单行固有宽度**排一次，
         // 顺手把栈撑宽 —— 表现就是"歌词跑到卡片外面被裁掉、滚动看着跑偏"。
-        let wrapWidth = max(bounds.width - 2 * lyricsSideInset, 1)
+        let wrapWidth = currentWrapWidth
         if wrapWidth != lastWrapWidth {
             lastWrapWidth = wrapWidth
             for label in lineLabels { label.preferredMaxLayoutWidth = wrapWidth }
             for label in translationLabels { label.preferredMaxLayoutWidth = wrapWidth }
         }
+
+        // 有壳时歌词的上下留白要跟着安全区 + 壳的高度走（旋转 / 换设备都要跟着变）。
+        updateLyricsInsetsIfNeeded()
 
         // 尺寸变化时打一条（排查"挂上了但大小/换行不对"用；不随每帧刷屏）。
         if bounds.size != lastLoggedSize {
@@ -394,9 +396,49 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         }
     }
 
+    /// 安全区：**优先用窗口的**。
+    ///
+    /// ⚠️ 真机实证（日志 8）：全屏页里我们挂在 `vc.view` 上，自己算出来的
+    /// `safeAreaInsets` 是 **0**（这一页的安全区由更上层处理），于是
+    /// "上淡出带"从屏幕最顶端开始、"下淡出带"压到进度条上 ——
+    /// 就是"淡入不在歌手下方、淡出不在进度条上方"。
+    /// 窗口的安全区一定拿得到，用它就和 SwiftUI 那边（新层）对齐了。
+    private var resolvedSafeAreaInsets: UIEdgeInsets {
+        if let insets = window?.safeAreaInsets, insets != .zero { return insets }
+        return safeAreaInsets
+    }
+
+    /// 有壳时歌词的上下留白 = 安全区 + 壳高度 + 呼吸。
+    ///
+    /// 数值全部取自 `LyricsShellLayout`（与新层同一份），所以第一行落在
+    /// "标题栏下沿 + 8"、最后一行停在"控件栏上沿 − 46"，两边一致。
+    private func updateLyricsInsetsIfNeeded() {
+        let insets = resolvedSafeAreaInsets
+        let top: CGFloat
+        let bottom: CGFloat
+        if showsPlaybackControls {
+            top = insets.top + LyricsShellLayout.headerHeight + LyricsShellLayout.contentTopInset
+            bottom = -(insets.bottom + LyricsShellLayout.footerHeight + LyricsShellLayout.contentBottomInset)
+        } else {
+            top = lyricsTopPadding
+            bottom = -60
+        }
+        if let constraint = stackTopConstraint, constraint.constant != top {
+            constraint.constant = top
+        }
+        if let constraint = stackBottomConstraint, constraint.constant != bottom {
+            constraint.constant = bottom
+        }
+    }
+
     /// 上一次设置过的折行宽度 / 上一次打过日志的尺寸（都是"变了才动"的缓存）。
     private var lastWrapWidth: CGFloat = -1
     private var lastLoggedSize: CGSize = .zero
+
+    /// 当前应当使用的折行宽度（= 我们宽度 − 左右边距）。
+    private var currentWrapWidth: CGFloat {
+        max(bounds.width - 2 * lyricsSideInset, 1)
+    }
 
     /// 设置背景样式：全屏传 `.stage`（溢出铺满整屏、均匀暗化），
     /// 内嵌预览传 `.card`（只在卡片内、上下暗中间透）。
@@ -461,18 +503,26 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         stackTopConstraint = stackTop
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor),
+            // ⚠️ 滚动视图贴自己的四边，**不贴安全区**：安全区改由歌词的上下留白承担
+            // （见 `updateLyricsInsetsIfNeeded`）。这样"第一行落在标题栏下沿"这件事
+            // 只依赖一处计算，不会再出现"我们这层拿到的 safeAreaInsets 是 0"时整体上移。
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             stackTop,
             stackBottom,
         ])
 
-        // 左右/宽度单独建，便于全屏时调整左边距
+        // 左右/宽度单独建，便于全屏时调整左边距。
+        //
+        // ⚠️ 宽度锚到**自己**（不是 `scrollView.frameLayoutGuide`）：日志 8 实证，
+        // 某些时序下那条链会解出一个比我们宽得多的值（overlay=342 而 stack=486），
+        // 歌词于是被排成 486pt 宽、在卡片右缘裁掉 —— 就是"预览歌词向左偏移"。
+        // 锚到自己就只有一个来源：我们的宽度。
         let leading = stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: lyricsSideInset)
         let trailing = stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -lyricsSideInset)
-        let width = stackView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -(2 * lyricsSideInset))
+        let width = stackView.widthAnchor.constraint(equalTo: widthAnchor, constant: -(2 * lyricsSideInset))
         NSLayoutConstraint.activate([leading, trailing, width])
         stackLeadingConstraint = leading
         stackTrailingConstraint = trailing
@@ -531,11 +581,9 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         guard controlsApplied != visible else { return }
         controlsApplied = visible
         shellHosts.setHidden(!visible)
-        // 歌词的上下留白用**与新层同一份常数**（`LyricsShellLayout`）：
-        // 顶部让出标题栏 62 + 8，底部让出控件栏 116 + 46。
+        // 歌词的上下留白由 `updateLyricsInsetsIfNeeded` 统一算（安全区 + 壳高度），
         // 否则第一行会钻到标题栏底下、最后几行会被进度条压住。
-        stackTopConstraint?.constant = visible ? shellTopPadding : lyricsTopPadding
-        stackBottomConstraint?.constant = visible ? -shellBottomPadding : -60
+        updateLyricsInsetsIfNeeded()
         setNeedsLayout()
     }
 
@@ -571,13 +619,18 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     private func logLegacyGeometry() {
         guard !lineLabels.isEmpty else { return }
         let inWindow = convert(bounds, to: nil)
+        let insets = showsPlaybackControls ? resolvedSafeAreaInsets : safeAreaInsets
         writeDebugLog(
             "[WordByWord] legacy geometry overlay=\(Int(bounds.width))x\(Int(bounds.height))"
                 + " at(\(Int(inWindow.minX)),\(Int(inWindow.minY)))"
                 + " scroll=\(Int(scrollView.frame.width))"
+                + " content=\(Int(scrollView.contentSize.width))"
                 + " stack=\(Int(stackView.frame.width))"
                 + " label=\(Int(lineLabels[0].frame.width))"
+                + " wrap=\(Int(currentWrapWidth))"
                 + " sideInset=\(Int(lyricsSideInset))"
+                + " insets=(\(Int(insets.top)),\(Int(insets.bottom)))"
+                + " shell=\(showsPlaybackControls)"
         )
     }
 
@@ -716,6 +769,10 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             label.numberOfLines = 0
             label.textAlignment = .left
             label.font = .systemFont(ofSize: lyricsFontSize, weight: .semibold)
+            // 折行宽度**建的时候**就给死：别等下一轮布局（`layoutSubviews` 里那次）
+            // 才设，否则第一帧会按单行固有宽度排、把栈撑宽 —— 真机上就是
+            // "预览歌词向左偏移 / 右边被卡片裁掉"。
+            label.preferredMaxLayoutWidth = currentWrapWidth
             label.text = text
             label.textColor = lineColor
             label.isUserInteractionEnabled = true
@@ -734,6 +791,7 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
                     translationLabel.numberOfLines = 0
                     translationLabel.textAlignment = .left
                     translationLabel.font = .systemFont(ofSize: translationFontSize, weight: .regular)
+                    translationLabel.preferredMaxLayoutWidth = currentWrapWidth
                     translationLabel.textColor = translationColor
                     translationLabel.text = t
                     translationLabel.isUserInteractionEnabled = false
@@ -1387,6 +1445,18 @@ final class WordByWordHost {
                 )
                 return false
             }
+            // 预览宿主还必须**真的显示在屏幕上**。
+            //
+            // 日志 8 实证：歌词视图有可能是**离屏的复用视图** ——
+            // `legacy overlay attached — host=Lyrics_TextElementImpl.LyricsTextView 671x256`，
+            // 而它在窗口里的位置是 `at(-293,887)`（屏幕外）。挂上去就是"歌词挂错地方"：
+            // 我们那一层跑到别的界面上去了。看不见就不挂，交给看门狗下一轮再找。
+            if !showsProviderFooter, !Self.isVisibleOnScreen(view) {
+                Self.logRejectionThrottled(
+                    "[WordByWord] ⚠️ preview host off-screen (\(className)) — will retry"
+                )
+                return false
+            }
             var mountView = showsProviderFooter ? view : (card ?? view)
             if !showsProviderFooter, Self.isPageSized(mountView) {
                 // 卡片判据把"整页"当成了卡片（`cardContainer` 的尺寸启发式在
@@ -1807,6 +1877,29 @@ final class WordByWordHost {
         guard let reference = referenceWindowSize(for: view) else { return false }
         return bounds.width >= reference.width * 0.75
             && bounds.height >= reference.height * 0.75
+    }
+
+    /// 这个视图现在**真的显示在屏幕上**吗。
+    ///
+    /// 用来否掉两类宿主：
+    ///   · 离屏的复用视图（自适应表格 cell 回收后再没上屏，日志实证 `at(-293,887)`）；
+    ///   · 尺寸还没收敛 / 被折叠的容器。
+    ///
+    /// 判据：在窗口里、没被隐藏、尺寸像个歌词区（宽 > 120、高 > 60）、
+    /// 中心点在窗口内、且至少一半面积可见。
+    static func isVisibleOnScreen(_ view: UIView) -> Bool {
+        guard let window = view.window,
+              window.bounds.width > 1,
+              window.bounds.height > 1 else { return false }
+        guard !view.isHidden, view.alpha > 0.01 else { return false }
+
+        let frame = view.convert(view.bounds, to: window)
+        guard frame.width > 120, frame.height > 60 else { return false }
+        guard window.bounds.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
+
+        let visible = frame.intersection(window.bounds)
+        guard !visible.isNull, !visible.isEmpty else { return false }
+        return visible.width * visible.height >= frame.width * frame.height * 0.5
     }
 
     /// 判断尺寸用的参照（优先该视图自己所在的窗口，其次当前 key window）。
