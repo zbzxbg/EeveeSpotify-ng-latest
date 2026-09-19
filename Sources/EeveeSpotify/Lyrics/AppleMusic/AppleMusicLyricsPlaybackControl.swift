@@ -247,12 +247,39 @@ enum WordByWordPlaybackControl {
     ) {
         if let control = view as? UIControl,
            isOnScreen(control),
+           !isOwnControl(control),
            control.accessibilityIdentifier == identifier {
             result.append(control)
         }
         for subview in view.subviews {
             collectControls(byIdentifier: identifier, in: subview, into: &result)
         }
+    }
+
+    /// 这个控件是不是**我们自己画的壳**里的？
+    ///
+    /// ⚠️ 必须排除，否则会出现"自己点自己"的无限递归：
+    /// 旧渲染层早期那版收起键是个 `UIControl`、标签正好是 "close"，
+    /// 于是 `dismissFullscreen()` 按标签找到它 → `sendActions` → 又调
+    /// `dismissFullscreen()` → …… 真机直接爆栈崩溃
+    /// （日志里同一秒刷了几百行 `dismiss via native close button`）。
+    ///
+    /// 判据两条，够用且不看版本：
+    ///   · 祖先里有我们自己的 overlay 视图类；
+    ///   · 或者自己/祖先挂着 `eevee` 前缀的无障碍 id（SwiftUI 宿主视图我们会打上）。
+    private static func isOwnControl(_ view: UIView) -> Bool {
+        var node: UIView? = view
+        var depth = 0
+        while let current = node, depth < 24 {
+            if current is LyricsWordByWordOverlayView { return true }
+            if let identifier = current.accessibilityIdentifier,
+               identifier.hasPrefix("eevee") {
+                return true
+            }
+            node = current.superview
+            depth += 1
+        }
+        return false
     }
 
     // MARK: 关闭全屏
@@ -372,7 +399,9 @@ enum WordByWordPlaybackControl {
         in view: UIView,
         into result: inout [UIControl]
     ) {
-        if let control = view as? UIControl, isOnScreen(control) {
+        if let control = view as? UIControl,
+           isOnScreen(control),
+           !isOwnControl(control) {
             result.append(control)
         }
         for subview in view.subviews {
@@ -448,6 +477,7 @@ enum WordByWordPlaybackControl {
     ) {
         if let control = view as? UIControl,
            isOnScreen(control),
+           !isOwnControl(control),
            matchesLabel(control, labels: labels, exactMatch: exactMatch),
            !matchesLabel(control, labels: excluding, exactMatch: false) {
             result.append(control)
@@ -510,7 +540,9 @@ enum WordByWordPlaybackControl {
 /// - 是否在播放：**靠位置是否在变来推断**。不去猜 `isPlaying` 这种未公开属性 ——
 ///   位置连续两帧变化即"播放中"，长时间不动即"暂停"。这个方法在暂停、切歌、
 ///   seek 之后都能自洽，且不依赖任何私有签名。
-@available(iOS 26.0, *)
+///
+/// ⚠️ 刻意**不带** `@available(iOS 26.0, *)`：它只是 Combine + Foundation，
+/// 旧渲染层（不开「更好的逐词歌词」时走的那条）也要用同一个壳，所以两条路径共用。
 @MainActor
 final class AppleMusicLyricsPlaybackProjection: ObservableObject {
 
@@ -557,9 +589,10 @@ final class AppleMusicLyricsPlaybackProjection: ObservableObject {
 
 /// 全屏歌词页的"壳"**底部**：进度条 + 时间 + 播放控制。
 ///
-/// 标题栏在 `AppleMusicLyricsOverlayView.shellHeader`（它不需要播放状态，
-/// 所以留在那边，这里只管底部这块）。
-@available(iOS 26.0, *)
+/// 标题栏在 `LyricsShellChrome.header`（它不需要播放状态，所以留在那边，
+/// 这里只管底部这块）。
+///
+/// ⚠️ 同样**不带** `@available(iOS 26.0, *)`：旧渲染层共用这套壳。
 struct AppleMusicLyricsControls: View {
 
     @ObservedObject var projection: AppleMusicLyricsPlaybackProjection
@@ -645,7 +678,6 @@ struct AppleMusicLyricsControls: View {
 ///
 /// 为什么不用 SwiftUI 的 `Slider`：它自带系统外形（灰轨 + 大圆点 + 内边距），
 /// 和 Spotify 原生那条细线差得远 —— 既然目标是"看不出换过壳"，就自己画。
-@available(iOS 26.0, *)
 private struct AppleMusicLyricsProgressBar: View {
 
     let time: TimeInterval

@@ -202,97 +202,10 @@ private final class LineLabel: UILabel {
     var lineIndex = -1
 }
 
-/// 全屏壳的进度条：4pt 细轨 + 白色已播段 + 可拖动的圆点。
-///
-/// 与「更好的逐词歌词」里 SwiftUI 那条 `AppleMusicLyricsProgressBar` **同一套观感**
-/// （尺寸、配色、拖动行为都照抄），只是旧层要 UIKit 实现 —— 用户的要求就是
-/// "看起来像更好的逐词歌词那样"。
-///
-/// 为什么不用 `UISlider`：它自带系统外形（灰轨 + 大圆点 + 内边距），和原生那条细线
-/// 差得远。自己画反而更省事。
-final class WordByWordProgressBar: UIView {
-
-    /// 拖动结束回调，参数是 0…1 的比例（调用方拿总时长换算成毫秒去 seek）。
-    var onScrubEnd: ((Double) -> Void)?
-
-    private let track = UIView()
-    private let fill = UIView()
-    private let thumb = UIView()
-    private let trackHeight: CGFloat = 4
-    private let thumbSize: CGFloat = 11
-    /// 已播比例（0…1）。
-    private var fraction: Double = 0
-    /// 拖动中的临时比例：非 nil 时**不**被播放进度覆盖（否则手指按住时会被拽回去）。
-    private var scrubbedFraction: Double?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setup()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setup()
-    }
-
-    private func setup() {
-        track.backgroundColor = UIColor.white.withAlphaComponent(0.28)
-        track.layer.cornerRadius = trackHeight / 2
-        fill.backgroundColor = UIColor.white.withAlphaComponent(0.95)
-        fill.layer.cornerRadius = trackHeight / 2
-        thumb.backgroundColor = .white
-        thumb.layer.cornerRadius = thumbSize / 2
-
-        for view in [track, fill, thumb] {
-            view.isUserInteractionEnabled = false
-            addSubview(view)
-        }
-        isUserInteractionEnabled = true
-        addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:))))
-    }
-
-    /// 播放位置推进时调用（拖动中不覆盖用户手指的位置）。
-    func update(fraction value: Double) {
-        guard scrubbedFraction == nil else { return }
-        let clamped = min(max(value, 0), 1)
-        // 每帧都会调到这里：变化极小就不动，省掉一轮无谓的布局。
-        guard abs(clamped - fraction) > 0.0005 else { return }
-        fraction = clamped
-        setNeedsLayout()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let width = bounds.width
-        // 明确转成 CGFloat：别指望 Swift 的 CGFloat↔Double 隐式转换（老工具链上没有）。
-        let shown = CGFloat(min(max(scrubbedFraction ?? fraction, 0), 1))
-        let midY = bounds.midY
-        track.frame = CGRect(x: 0, y: midY - trackHeight / 2, width: width, height: trackHeight)
-        fill.frame = CGRect(x: 0, y: midY - trackHeight / 2, width: width * shown, height: trackHeight)
-        thumb.frame = CGRect(
-            x: width * shown - thumbSize / 2,
-            y: midY - thumbSize / 2,
-            width: thumbSize,
-            height: thumbSize
-        )
-    }
-
-    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
-        let x = recognizer.location(in: self).x
-        let value: CGFloat = bounds.width > 1 ? min(max(x / bounds.width, 0), 1) : 0
-        switch recognizer.state {
-        case .began, .changed:
-            scrubbedFraction = Double(value)
-            setNeedsLayout()
-        case .ended, .cancelled, .failed:
-            scrubbedFraction = nil
-            setNeedsLayout()
-            onScrubEnd?(Double(value))
-        default:
-            break
-        }
-    }
-}
+// 这里曾经有一个自绘的 UIKit 进度条 `WordByWordProgressBar`。
+// 已删除：进度条现在与「更好的逐词歌词」共用**同一份** SwiftUI 实现
+// （`AppleMusicLyricsProgressBar`，见 `AppleMusicLyricsPlaybackControl.swift`）——
+// 两份实现必然会在尺寸、圆点大小、拖动手感上慢慢跑偏。
 
 final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
 
@@ -307,17 +220,18 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     var showsProviderFooter = false
     /// 是否显示行级译文（全屏显示；内嵌「预览歌词」不显示）。
     var showsTranslation = true
-    /// 是否显示**全屏壳**：标题栏（曲名 + 歌手）、进度条 + 时间、三键、右上角收起键。
+    /// 是否显示**全屏壳**：曲名 + 歌手、进度条 + 时间、三键、右上角收起键。
     ///
     /// 为什么必须有：这一层在全屏时用的是**不透明**底色（见 `configureBackdropIfNeeded`），
     /// 而它挂在 `vc.view` 的最前面 —— 原生那一页的标题栏、进度条、播放键、
     /// 右上角收起键全被压在下面。不出自己的壳，用户在全屏里就是
     /// "一个按键都没有"，而且是一屏没有任何元信息的纯歌词（真机截图实证：很难看）。
     ///
-    /// 观感刻意与「更好的逐词歌词」的自绘壳对齐（曲名/歌手居中、细进度条 + 时间、
-    /// 三键居中、右上角收起、上下淡出）。**不包括**歌词本身的高亮/闪烁与背景 ——
-    /// 那两样在旧层里保持原样。
-    /// 预览不显示：卡片上那一行「歌词 + 分享/展开」是 Spotify 的，我们不抢。
+    /// ⚠️ 壳的内容**不是这里画的**：用的是与「更好的逐词歌词」**同一份** SwiftUI 组件
+    /// （`LyricsShellViews.swift`）。自己再手写一套 UIKit 壳的结果，真机对比下来
+    /// 处处对不上（标题偏高、三键太散、上下淡出难看）—— 用户的原话是"直接照抄不好吗"。
+    /// 这里只管：把它挂上、给它数据、按同样的常数给歌词让位。
+    /// 歌词本身的高亮/闪烁与背景仍保持旧层原样。
     var showsPlaybackControls = false {
         didSet {
             guard showsPlaybackControls != oldValue else { return }
@@ -327,41 +241,31 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     /// 行级译文标签（每行原文下面一行小字），用于 rebuild 清理。
     private var translationLabels: [UILabel] = []
 
-    // MARK: 全屏壳的部件
+    // MARK: 全屏壳（与「更好的逐词歌词」共用同一份组件）
 
-    /// 顶部：曲名 + 歌手（居中，与 Apple Music 壳一致）。
-    private let headerStack = UIStackView()
-    private let titleLabel = UILabel()
-    private let artistLabel = UILabel()
-    /// 底部：进度条 + 时间行 + 三键。
-    private let footerStack = UIStackView()
-    private let progressBar = WordByWordProgressBar()
-    private let elapsedLabel = UILabel()
-    private let remainingLabel = UILabel()
-    /// 三键（上一首 / 播放暂停 / 下一首）。
-    private let controlsBar = UIStackView()
-    /// 中间那颗播放/暂停键。单独持引用是为了切图标时不必去猜它在 stack 里的下标。
-    private let playPauseButton = UIButton(type: .system)
-    /// 全屏右上角收起键。
-    private let closeButton = UIButton(type: .system)
-    /// 底部壳占掉的高度（歌词底部留白要跟着让出来）：进度条 + 时间 + 间距 + 三键。
-    private let shellFooterHeight: CGFloat = 110
-    /// 顶部壳占掉的高度（标题两行 + 呼吸）。
-    private let shellHeaderHeight: CGFloat = 44
-    /// 上一次喂进来的时间 / 当前是否在播放 —— 用来切换播放键图标。
+    /// 壳的宿主（顶部条 + 底部条两个 SwiftUI hosting controller）。
+    private let shellHosts = LyricsShellHosts()
+    /// 壳要的播放状态投影（当前时间 / 总时长 / 是否在播放）。
     ///
-    /// "是否在播放"靠**位置是否在推进**推断（与 Apple Music 壳的
-    /// `AppleMusicLyricsPlaybackProjection` 同一套办法），不去猜未公开属性。
-    private var lastSubmittedMs: Double?
-    private var isPlayingNow = false
-    /// 当前这首歌的总时长（毫秒），进度条与"-剩余"用它。1s 刷一次，取不到就留 nil。
-    private var durationMs: Int?
-    private var lastDurationRefresh: Date = .distantPast
+    /// 位置来源与歌词高亮**复用同一个** `WordByWordPositionResolver` ——
+    /// 两处各读一次播放器很容易错拍（进度条和歌词差半秒那种）。
+    private lazy var projection = AppleMusicLyricsPlaybackProjection {
+        WordByWordPositionResolver.shared.currentPositionSeconds()
+    }
+    /// 换歌时要跟着变的壳文本。
+    private var shellTitle: String = ""
+    private var shellArtist: String = ""
+    /// 壳的边距/高度常数（与 `AppleMusicLyricsPage` 同一份，见 `LyricsShellLayout`）。
+    private var shellTopPadding: CGFloat {
+        LyricsShellLayout.headerHeight + LyricsShellLayout.contentTopInset
+    }
+    private var shellBottomPadding: CGFloat {
+        LyricsShellLayout.footerHeight + LyricsShellLayout.contentBottomInset
+    }
     /// 壳当前是否已按"可见"布置过（避免每帧重设约束常量）。
     private var controlsApplied: Bool?
     private var stackBottomConstraint: NSLayoutConstraint?
     private var stackTopConstraint: NSLayoutConstraint?
-    private var headerTopConstraint: NSLayoutConstraint?
 
     private var dto: LyricsDto?
     private var dtoVersion = -1
@@ -431,35 +335,38 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             frame = CGRect(origin: .zero, size: host.bounds.size)
         }
 
-        // 顶部标题栏：与 Apple Music 壳同位置（安全区再往上抬 30，取不到就留 4）。
-        // ⚠️ 只在真的变了才写：改 `constant` 会让这一轮布局再失效一次，
-        // 每轮都写就是在自己触发自己（无限布局循环）。
-        let desiredHeaderTop = max(safeAreaInsets.top - 30, 4)
-        if let constraint = headerTopConstraint, constraint.constant != desiredHeaderTop {
-            constraint.constant = desiredHeaderTop
-        }
-
-        // 上下淡出带。有壳时分别贴住标题栏下沿与进度条上沿 —— 淡出落在壳的边缘上，
-        // 而不是像以前那样按整屏安全区算（那样歌词会淡在标题栏底下）。
+        // 上下淡出带。
+        //
+        // 有壳时**用与新层同一套停靠点**（`AppleMusicLyricsPage.fadeMaskStops` 的口径）：
+        //   · 上：从「标题栏顶部」透明 → 到「标题栏底部」完全不透明；
+        //   · 下：从「控件栏上方 fadeBottomBand」完全不透明 → 到「控件栏顶部」透明。
+        // 以前是"安全区往下 48pt"的一小条，位置和宽度都跟新层对不上，看着很脏。
         let fadeHeight: CGFloat = bounds.height < 420 ? 28 : 48
         let topFadeTop: CGFloat
+        let topFadeHeight: CGFloat
         let bottomFadeBottom: CGFloat
+        let bottomFadeHeight: CGFloat
         if showsPlaybackControls {
-            topFadeTop = max(safeAreaInsets.top - 30, 4) + shellHeaderHeight
+            let topClear = safeAreaInsets.top + LyricsShellLayout.headerTopInset
+            let topOpaque = safeAreaInsets.top + LyricsShellLayout.headerHeight
+            topFadeTop = topClear
+            topFadeHeight = max(topOpaque - topClear, 1)
             bottomFadeBottom = bounds.height
-                - max(safeAreaInsets.bottom, 8)
-                - shellFooterHeight
+                - (max(safeAreaInsets.bottom, 8) + LyricsShellLayout.footerHeight)
+            bottomFadeHeight = LyricsShellLayout.fadeBottomBand
         } else {
             topFadeTop = safeAreaInsets.top
+            topFadeHeight = fadeHeight
             bottomFadeBottom = bounds.height - safeAreaInsets.bottom
+            bottomFadeHeight = fadeHeight
         }
-        topFadeView.frame = CGRect(x: 0, y: topFadeTop, width: bounds.width, height: fadeHeight)
+        topFadeView.frame = CGRect(x: 0, y: topFadeTop, width: bounds.width, height: topFadeHeight)
         topFadeLayer.frame = topFadeView.bounds
         bottomFadeView.frame = CGRect(
             x: 0,
-            y: bottomFadeBottom - fadeHeight,
+            y: bottomFadeBottom - bottomFadeHeight,
             width: bounds.width,
-            height: fadeHeight
+            height: bottomFadeHeight
         )
         bottomFadeLayer.frame = bottomFadeView.bounds
 
@@ -578,152 +485,29 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         applyControlsVisibility(showsPlaybackControls)
     }
 
-    // MARK: 全屏壳（旧层的"壳"，观感对齐「更好的逐词歌词」）
+    // MARK: 全屏壳（与「更好的逐词歌词」共用同一份组件）
 
-    /// 全屏壳：曲名 + 歌手、细进度条 + 时间、三键、右上角收起键。
+    /// 把壳挂上（只挂一次；显隐与内容由 `applyControlsVisibility` /
+    /// `refreshShellMetadata` 管）。
     ///
-    /// 动作全部转发给 `WordByWordPlaybackControl`（它按无障碍 id/标签找原生控件，
-    /// 或直接调 `statefulPlayer`）。**不自己拼私有播放接口** —— 那套签名没有承诺，
-    /// 找原生控件反而是最稳的。
-    ///
-    /// 为什么"看起来要像新层"：旧层原来在全屏里只是一屏纯歌词 + 三颗孤零零的
-    /// 白色三角（真机截图实证，很难看），既没有曲名歌手也没有进度条。
-    /// 这里把新层那套壳照搬过来 —— 只是**照搬观感**，歌词的高亮/闪烁与背景保持旧层原样。
+    /// 壳的每个部件都来自 `LyricsShellViews.swift` —— 与新层是**同一份代码**。
+    /// （自己再手写一套 UIKit 壳的结果，真机对比处处对不上：标题偏高、三键太散、
+    /// 上下淡出难看；而且那个自绘收起键的标签正好是 "close"，
+    /// 被 `dismissFullscreen()` 当成原生控件点了回来 —— 无限递归直接爆栈崩掉。）
     private func setupPlaybackControls() {
-        // ── 顶部：曲名 + 歌手 ──────────────────────────────────────────────
-        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        titleLabel.textColor = .white
-        titleLabel.textAlignment = .center
-        titleLabel.lineBreakMode = .byTruncatingTail
-
-        artistLabel.font = .systemFont(ofSize: 12)
-        artistLabel.textColor = UIColor.white.withAlphaComponent(0.72)
-        artistLabel.textAlignment = .center
-        artistLabel.lineBreakMode = .byTruncatingTail
-
-        headerStack.axis = .vertical
-        headerStack.spacing = 2
-        headerStack.alignment = .fill
-        headerStack.translatesAutoresizingMaskIntoConstraints = false
-        headerStack.isHidden = true
-        headerStack.isUserInteractionEnabled = false
-        headerStack.addArrangedSubview(titleLabel)
-        headerStack.addArrangedSubview(artistLabel)
-        addSubview(headerStack)
-
-        // ── 底部：进度条 + 时间 + 三键 ─────────────────────────────────────
-        progressBar.translatesAutoresizingMaskIntoConstraints = false
-        progressBar.onScrubEnd = { [weak self] fraction in
-            guard let self, let durationMs = self.durationMs, durationMs > 0 else { return }
-            WordByWordSeeker.seek(toMs: Int((Double(durationMs) * fraction).rounded()))
-        }
-
-        for label in [elapsedLabel, remainingLabel] {
-            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-            label.textColor = UIColor.white.withAlphaComponent(0.62)
-        }
-        elapsedLabel.textAlignment = .left
-        remainingLabel.textAlignment = .right
-
-        let timesRow = UIStackView(arrangedSubviews: [elapsedLabel, UIView(), remainingLabel])
-        timesRow.axis = .horizontal
-        timesRow.alignment = .center
-        timesRow.distribution = .fill
-
-        controlsBar.axis = .horizontal
-        controlsBar.alignment = .center
-        controlsBar.distribution = .equalSpacing
-        controlsBar.spacing = 44
-        controlsBar.addArrangedSubview(
-            makeTransportButton(systemName: "backward.fill", pointSize: 22, action: #selector(handlePrevious))
+        shellHosts.attach(
+            to: self,
+            projection: projection,
+            primaryColor: .white,
+            onSeek: { time in
+                // 与点歌词行走同一条 seek 路径（+5ms 是为了稳稳落在行内部而不是边界）。
+                WordByWordSeeker.seek(toMs: Int((time * 1000).rounded()) + 5)
+            },
+            onClose: {
+                WordByWordPlaybackControl.dismissFullscreen()
+            }
         )
-
-        playPauseButton.setPreferredSymbolConfiguration(
-            UIImage.SymbolConfiguration(pointSize: 30, weight: .medium),
-            forImageIn: .normal
-        )
-        playPauseButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
-        playPauseButton.tintColor = .white
-        playPauseButton.accessibilityLabel = "play"
-        playPauseButton.addTarget(self, action: #selector(handlePlayPause), for: .touchUpInside)
-        controlsBar.addArrangedSubview(playPauseButton)
-
-        controlsBar.addArrangedSubview(
-            makeTransportButton(systemName: "forward.fill", pointSize: 22, action: #selector(handleNext))
-        )
-
-        footerStack.axis = .vertical
-        footerStack.alignment = .fill
-        footerStack.translatesAutoresizingMaskIntoConstraints = false
-        footerStack.isHidden = true
-        footerStack.addArrangedSubview(progressBar)
-        footerStack.addArrangedSubview(timesRow)
-        footerStack.addArrangedSubview(controlsBar)
-        footerStack.setCustomSpacing(3, after: progressBar)
-        footerStack.setCustomSpacing(12, after: timesRow)
-        addSubview(footerStack)
-
-        // ── 右上角：收起全屏 ──────────────────────────────────────────────
-        closeButton.setPreferredSymbolConfiguration(
-            UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold),
-            forImageIn: .normal
-        )
-        closeButton.setImage(UIImage(systemName: "chevron.down"), for: .normal)
-        closeButton.tintColor = .white
-        closeButton.translatesAutoresizingMaskIntoConstraints = false
-        closeButton.isHidden = true
-        closeButton.accessibilityLabel = "close"
-        closeButton.addTarget(self, action: #selector(handleClose), for: .touchUpInside)
-        addSubview(closeButton)
-
-        let headerTop = headerStack.topAnchor.constraint(equalTo: topAnchor, constant: 8)
-        headerTopConstraint = headerTop
-
-        NSLayoutConstraint.activate([
-            headerTop,
-            headerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 56),
-            headerStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -56),
-
-            footerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-            footerStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
-            footerStack.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -8),
-            progressBar.heightAnchor.constraint(equalToConstant: 24),
-            controlsBar.heightAnchor.constraint(equalToConstant: 56),
-
-            closeButton.widthAnchor.constraint(equalToConstant: 44),
-            closeButton.heightAnchor.constraint(equalToConstant: 44),
-            closeButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            closeButton.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 6),
-        ])
-    }
-
-    /// 三键用同一套尺寸：**固定按钮大小 + 固定符号大小**。
-    ///
-    /// ⚠️ 只 `setImage(UIImage(systemName:withConfiguration:))` 是不够的：
-    /// 真机截图里那三颗会渲染成一大坨白色三角（按钮按图片的固有尺寸撑开，
-    /// 而 stack 只约束了行高）。改用 `setPreferredSymbolConfiguration` +
-    /// 固定宽高，符号大小才是我们要的那个。
-    private func makeTransportButton(
-        systemName: String,
-        pointSize: CGFloat,
-        action: Selector
-    ) -> UIButton {
-        let button = UIButton(type: .system)
-        button.setPreferredSymbolConfiguration(
-            UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium),
-            forImageIn: .normal
-        )
-        button.setImage(UIImage(systemName: systemName), for: .normal)
-        button.tintColor = .white
-        button.imageView?.contentMode = .scaleAspectFit
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.addTarget(self, action: action, for: .touchUpInside)
-        let side = pointSize + 26
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: side),
-            button.heightAnchor.constraint(equalToConstant: side),
-        ])
-        return button
+        shellHosts.setHidden(true)
     }
 
     /// 如果自己不在宿主的最前面就抬一次（已经是最前时什么都不做）。
@@ -731,8 +515,12 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     /// 每帧都会被调用，所以不能真的每次都重排 subviews —— 那会让 UIKit 每帧都做一次
     /// 数组搬移与图层重排。
     private func ensureFrontmost() {
-        guard let host = superview, host.subviews.last !== self else { return }
-        host.bringSubviewToFront(self)
+        guard let host = superview else { return }
+        if host.subviews.last !== self {
+            host.bringSubviewToFront(self)
+        }
+        // 壳的两个宿主也要一直压在最上面（原生内容重排 subviews 时会挤上来）。
+        shellHosts.bringToFront()
     }
 
     /// 显示 / 隐藏整套壳，并让歌词上下留出同样的空。
@@ -742,115 +530,60 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     private func applyControlsVisibility(_ visible: Bool) {
         guard controlsApplied != visible else { return }
         controlsApplied = visible
-        headerStack.isHidden = !visible
-        footerStack.isHidden = !visible
-        closeButton.isHidden = !visible
-        progressBar.isHidden = !visible
-        // 歌词的上下留白：可见时把壳占的高度让出来，
-        // 否则第一行会钻到标题栏底下、最后几行会被压在进度条下面。
-        stackTopConstraint?.constant = lyricsTopPadding + (visible ? shellHeaderHeight : 0)
-        stackBottomConstraint?.constant = visible ? -(60 + shellFooterHeight) : -60
+        shellHosts.setHidden(!visible)
+        // 歌词的上下留白用**与新层同一份常数**（`LyricsShellLayout`）：
+        // 顶部让出标题栏 62 + 8，底部让出控件栏 116 + 46。
+        // 否则第一行会钻到标题栏底下、最后几行会被进度条压住。
+        stackTopConstraint?.constant = visible ? shellTopPadding : lyricsTopPadding
+        stackBottomConstraint?.constant = visible ? -shellBottomPadding : -60
         setNeedsLayout()
     }
 
-    @objc private func handlePrevious() {
-        WordByWordPlaybackControl.skipToPrevious()
-    }
-
-    @objc private func handlePlayPause() {
-        WordByWordPlaybackControl.togglePlayPause()
-    }
-
-    @objc private func handleNext() {
-        WordByWordPlaybackControl.skipToNext()
-    }
-
-    @objc private func handleClose() {
-        WordByWordPlaybackControl.dismissFullscreen()
-    }
-
-    /// 按"位置是否在推进"推断播放状态，并刷新壳上的进度条 / 时间 / 播放图标。
-    private func updateShellPlayback(_ ms: Double) {
-        guard showsPlaybackControls else { return }
-        let previous = lastSubmittedMs
-        lastSubmittedMs = ms
-
-        let playing: Bool
-        if let previous {
-            if ms > previous + 0.001 {
-                playing = true
-            } else if abs(ms - previous) <= 0.001 {
-                playing = false
-            } else {
-                // 往回跳（seek / 上一首）：保持上一次的判断，别闪一下图标。
-                playing = isPlayingNow
-            }
-        } else {
-            playing = isPlayingNow
-        }
-
-        if playing != isPlayingNow {
-            isPlayingNow = playing
-            playPauseButton.setImage(
-                UIImage(systemName: playing ? "pause.fill" : "play.fill"),
-                for: .normal
-            )
-        }
-
-        // 总时长一次播放内不变，1 秒刷一次足够（与 Apple Music 壳同一套做法）。
-        let now = Date()
-        if now.timeIntervalSince(lastDurationRefresh) > 1 {
-            lastDurationRefresh = now
-            if let trackMs = statefulPlayer?.currentTrack()?.trackDurationMilliseconds, trackMs > 0 {
-                durationMs = trackMs
-            }
-        }
-
-        let seconds = ms / 1000
-        let duration = Double(durationMs ?? 0) / 1000
-        progressBar.update(fraction: duration > 0 ? seconds / duration : 0)
-
-        // 文案没变就不写（每帧都写会让 label 每帧重绘一次）。
-        let elapsed = Self.clock(seconds)
-        if elapsedLabel.text != elapsed { elapsedLabel.text = elapsed }
-        let remaining = duration > 0 ? "-" + Self.clock(max(duration - seconds, 0)) : ""
-        if remainingLabel.text != remaining { remainingLabel.text = remaining }
-    }
-
-    /// `m:ss`（与 Spotify 原生一致，不补零到 `mm:ss`）。
-    private static func clock(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let total = Int(seconds.rounded())
-        return "\(total / 60):" + String(format: "%02d", total % 60)
-    }
-
-    /// 换歌时刷新壳上的曲名 / 歌手 / 总时长。
+    /// 每帧把播放状态喂给壳。
     ///
-    /// 曲名与歌手从 `SPTPlayerTrack` 取（与 Apple Music 壳一致）：歌词里没有歌手名，
-    /// 而曲名在歌词数据里可能是别的语言写法。总时长用来算进度条与"-剩余"。
+    /// 进度条的百分比、两个时间、播放/暂停图标**全在那份投影里算** ——
+    /// 与新层走的是同一个 `AppleMusicLyricsPlaybackProjection`，所以两边的
+    /// 手感/数值天然一致，不会各算各的。
+    private func updateShellPlayback() {
+        guard showsPlaybackControls else { return }
+        projection.refresh()
+    }
+
+    /// 换歌时刷新壳上的曲名 / 歌手。
+    ///
+    /// 从 `SPTPlayerTrack` 取（与新层一致）：歌词里没有歌手名，
+    /// 而曲名在歌词数据里可能是别的语言写法。
     private func refreshShellMetadata() {
         let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
-        titleLabel.text = track?.trackTitle() ?? ""
-        artistLabel.text = (EeveeSpotify.hookTarget == .lastAvailableiOS14
+        shellTitle = track?.trackTitle() ?? ""
+        shellArtist = (EeveeSpotify.hookTarget == .lastAvailableiOS14
             ? track?.artistTitle()
             : track?.artistName()) ?? ""
-        if let ms = track?.trackDurationMilliseconds, ms > 0 {
-            durationMs = ms
-        } else {
-            durationMs = nil
-        }
-        progressBar.update(fraction: 0)
-        elapsedLabel.text = Self.clock(0)
-        remainingLabel.text = durationMs.map { "-" + Self.clock(Double($0) / 1000) } ?? ""
+        shellHosts.update(title: shellTitle, artist: shellArtist)
+        writeDebugLog("[Shell] legacy metadata \"\(shellTitle)\" — \"\(shellArtist)\"")
+    }
+
+    /// 打完一行几何诊断：**"歌词看起来偏不偏"全在这几个数里**。
+    ///
+    /// 面板宽度、它在窗口里的位置、滚动视图宽度、栈宽、第一行 label 的宽度 ——
+    /// 之前"预览歌词偏左/被裁"这类问题只能靠猜，有了这一行一眼就能定位。
+    /// 每次 rebuild（换歌 / 换数据）打一条，不随每帧刷屏。
+    private func logLegacyGeometry() {
+        guard !lineLabels.isEmpty else { return }
+        let inWindow = convert(bounds, to: nil)
         writeDebugLog(
-            "[Shell] legacy metadata \"\(titleLabel.text ?? "")\" — \"\(artistLabel.text ?? "")\""
-                + " duration=\(durationMs.map { String($0) } ?? "nil")ms"
+            "[WordByWord] legacy geometry overlay=\(Int(bounds.width))x\(Int(bounds.height))"
+                + " at(\(Int(inWindow.minX)),\(Int(inWindow.minY)))"
+                + " scroll=\(Int(scrollView.frame.width))"
+                + " stack=\(Int(stackView.frame.width))"
+                + " label=\(Int(lineLabels[0].frame.width))"
+                + " sideInset=\(Int(lyricsSideInset))"
         )
     }
 
     /// 每帧由时钟调用：惰性取 dto、词级高亮、自动滚动。
     func setCurrentTime(_ ms: Double) {
-        updateShellPlayback(ms)
+        updateShellPlayback()
         // 原生内容（卡片里的歌词视图 / Element 各层）会在重排 subviews 时把我们挤下去，
         // 那一下 "bringSubviewToFront" 就白做了 —— 表现是"预览里的逐词层时不时被盖住"。
         // 每帧补一次；已经是最前时只花一次指针比较。
@@ -1027,6 +760,11 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             stackView.addArrangedSubview(footer)
             providerLabel = footer
         }
+
+        // 标签建完了：这一步之后几何才有意义（见那一行日志的说明）。
+        setNeedsLayout()
+        layoutIfNeeded()
+        logLegacyGeometry()
     }
 
     /// 由词文本拼出行显示文本，并记录每个词在文本中的范围（空格 token 保留，空文本词跳过）。

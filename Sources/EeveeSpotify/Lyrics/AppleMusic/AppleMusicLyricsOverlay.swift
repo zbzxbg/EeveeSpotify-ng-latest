@@ -242,24 +242,20 @@ struct AppleMusicLyricsOverlayView: View {
     }
 
     /// 顶部：曲名 + 歌手（居中，与 Spotify 原生一致）。
+    ///
+    /// 内容本身在 `LyricsShellChrome` 里 —— 旧渲染层（不开「更好的逐词歌词」时那条）
+    /// 用的是**同一份代码**，见 `LyricsShellViews.swift` 的文件头说明。
     private var shellHeader: some View {
-        VStack(spacing: 2) {
-            Text(trackTitle)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(primaryColor)
-                .lineLimit(1)
-            Text(trackArtist)
-                .font(.system(size: 12))
-                .foregroundStyle(primaryColor.opacity(0.72))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 56)
-        .frame(maxWidth: .infinity)
+        LyricsShellChrome.header(
+            title: trackTitle,
+            artist: trackArtist,
+            primaryColor: primaryColor
+        )
     }
 
     /// 底部：进度条 + 时间 + 播放控制。
     private var shellFooter: some View {
-        AppleMusicLyricsControls(
+        LyricsShellChrome.footer(
             projection: projection,
             primaryColor: primaryColor,
             onSeek: { onSeek?($0) }
@@ -268,16 +264,9 @@ struct AppleMusicLyricsOverlayView: View {
 
     /// 右上角：关闭全屏页（原生那个 chevron 被我们的背景盖住了，所以自己画一个）。
     private var shellClose: some View {
-        Button {
+        LyricsShellChrome.close(primaryColor: primaryColor) {
             WordByWordPlaybackControl.dismissFullscreen()
-        } label: {
-            Image(systemName: "chevron.down")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(primaryColor)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -451,6 +440,9 @@ final class AppleMusicLyricsOverlayHost {
             hosting.view.translatesAutoresizingMaskIntoConstraints = false
             // 让 SwiftUI 内容透传触摸：只有歌词行自己是可点的。
             hosting.view.isUserInteractionEnabled = true
+            // ⚠️ 打个"自己人"标记：`WordByWordPlaybackControl` 按无障碍标签在窗口里
+            // 找原生控件时会跳过这条链上的控件，避免"自己点自己"（真机爆栈崩过）。
+            hosting.view.accessibilityIdentifier = "eevee-lyrics-shell"
         }
 
         currentSideInset = sideInset
