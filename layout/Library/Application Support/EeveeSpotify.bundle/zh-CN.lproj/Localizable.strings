@@ -107,8 +107,6 @@ contributors = "参与者";
 Developement = "开发者";
 Localization = "本地化翻译";
 
-request_anonymous_token = "请求匿名令牌";
-
 lrclib_api = "服务器地址";
 
 // Snapshot of your benefits, should match official spotify loc
@@ -171,7 +169,6 @@ musixmatch_restricted = "受限制";
 invalid_musixmatch_token = "未授权";
 decoding_error = "解码错误";
 unknown_error = "未知错误";
-request_anonymous_token_description = "点击 “请求匿名令牌” 即可在无需授权的情况下向 Musixmatch 请求令牌。";
 true_shuffle = "真实随机播放";
 true_shuffle_dec = "阻止 Spotify 免费版的智能随机播放将推荐曲目混入你的队列。随机播放只会在播放列表内进行。";
 sponsorblock = "SponsorBlock (测试版)";
@@ -286,4 +283,3 @@ Cancel = "取消";
 Done = "完成";
 Loading = "加载中";
 episode_header = "单集 %@";
-anonymous_token_request_failed = "匿名令牌获取失败。";

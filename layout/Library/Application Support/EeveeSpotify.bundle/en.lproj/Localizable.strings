@@ -113,8 +113,6 @@ contributors = "Contributors";
 Developement = "Developers";
 Localization = "Localization";
 
-request_anonymous_token = "Request Anonymous Token";
-
 lrclib_api = "Server Address";
 
 // Snapshot of your benefits, should match official spotify loc
@@ -181,7 +179,6 @@ musixmatch_restricted = "Restricted";
 invalid_musixmatch_token = "Unauthorized";
 decoding_error = "Decoding Error";
 unknown_error = "Unknown Error";
-request_anonymous_token_description = "Tap “Request Anonymous Token” to request a token from Musixmatch without authorization.";
 resetButtonTitle = "Full Reset";
 resetSubtitle = "Each is independent.";
 resetFooter = "Force re-login. Wipes Spotify keychain entries, sandbox dirs, and app-group containers. Other sideloaded apps untouched. App exits when done.";
@@ -292,4 +289,3 @@ Cancel = "Cancel";
 Done = "Done";
 Loading = "Loading";
 episode_header = "Episode %@";
-anonymous_token_request_failed = "Failed to request an anonymous token.";

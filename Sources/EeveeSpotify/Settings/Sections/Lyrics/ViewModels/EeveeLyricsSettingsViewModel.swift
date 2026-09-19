@@ -100,9 +100,22 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
     
+    /// Musixmatch 用户令牌。
+    ///
+    /// ⚠️ 这里**只剩手动填写**一条路。
+    ///
+    /// 以前还有一条"匿名令牌"路径：`isRequestingMusixmatchToken` +
+    /// `musixmatchTokenInputAlertPublisher` + `requestAnonymousMusixmatchToken()`，
+    /// 走 `apic.musixmatch.com/ws/1.1/token.get` 不授权换一个令牌。
+    /// 已整体移除（设置项按钮、来源弹窗里的同名选项、失败提示弹窗一起删）。
+    ///
+    /// 连带删掉的状态说明：
+    ///   · `isRequestingMusixmatchToken` 只用来给那个按钮画转圈、以及把整个设置页
+    ///     `.disabled` 掉。没有按钮之后它永远是 false，留着就是死状态；
+    ///   · `musixmatchTokenInputAlertPublisher` 从来没有任何地方 `send` 过
+    ///     （`EeveeLyricsSettingsView` 的 `.onReceive` 是收不到东西的），
+    ///     属于同一批残留，一起删。
     @Published var musixmatchToken = UserDefaults.musixmatchToken
-    @Published var isRequestingMusixmatchToken = false
-    @Published var musixmatchTokenInputAlertPublisher = PassthroughSubject<Bool, Never>()
     var isMusixmatchTokenValid: Bool { getMusixmatchToken(musixmatchToken) != nil }
     
     @Published var showMusixmatchInvalidLanguageWarning = false
@@ -121,7 +134,6 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
             neteaseRomajiLocal,
             neteaseHideTranslation,
             isMusixmatchTokenValid,
-            isRequestingMusixmatchToken,
             lrclibURLState,
             showMusixmatchInvalidLanguageWarning
         ]
@@ -148,36 +160,5 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
         
         return nil
-    }
-    
-    func requestAnonymousMusixmatchToken() {
-        guard !isRequestingMusixmatchToken else { return }
-        isRequestingMusixmatchToken = true
-                
-        AnonymousTokenHelper.requestAnonymousMusixmatchToken()
-            .receive(on: DispatchQueue.main)
-            .sink(receiveCompletion: { [weak self] completion in
-                self?.isRequestingMusixmatchToken = false
-                
-                switch completion {
-                case .failure(let error):
-                    let message: String
-                    if error is AnonymousTokenError {
-                        message = "anonymous_token_request_failed".localized
-                    } else {
-                        message = error.localizedDescription
-                    }
-                    PopUpHelper.showPopUp(
-                        delayed: false,
-                        message: message,
-                        buttonText: "OK".uiKitLocalized
-                    )
-                case .finished:
-                    break
-                }
-            }, receiveValue: { [weak self] token in
-                self?.musixmatchToken = token
-            })
-            .store(in: &cancellables)
     }
 }

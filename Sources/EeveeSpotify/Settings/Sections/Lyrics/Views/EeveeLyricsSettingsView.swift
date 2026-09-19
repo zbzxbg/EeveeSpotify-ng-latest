@@ -58,11 +58,12 @@ struct EeveeLyricsSettingsView: View {
             
             NonIPadSpacerView()
         }
-        .onReceive(viewModel.musixmatchTokenInputAlertPublisher) { showAnonymousTokenOption in
-            showMusixmatchTokenAlert(UserDefaults.lyricsSource, showAnonymousTokenOption)
-        }
+        // ⚠️ 这里曾经有一个 `.onReceive(viewModel.musixmatchTokenInputAlertPublisher)`，
+        // 用 `showAnonymousTokenOption` 决定弹窗里要不要显示「请求匿名令牌」。
+        // 那个 publisher 全工程没有任何一处 `send`（死订阅），而匿名令牌选项本身
+        // 也已整体移除 —— 两个一起去掉。
+        // 手动填令牌的弹窗保留，改由下面这个绑定在"选中 Musixmatch 那一刻"调用。
         .listStyle(GroupedListStyle())
-        .disabled(viewModel.isRequestingMusixmatchToken)
         .animation(.default, value: viewModel.animationValues)
     }
     
