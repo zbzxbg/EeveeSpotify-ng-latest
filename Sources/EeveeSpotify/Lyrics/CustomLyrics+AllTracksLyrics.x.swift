@@ -146,9 +146,14 @@ enum InlineLyricsHostLocator {
         onMainThreadSync {
             // 先做便宜的判据，最后才去找宿主（找宿主可能要遍历整棵视图树）。
             guard NgzhwmSettingsViewModel.isWordByWordLyricsEnabled else { return }
-            // 没有**可用的词级数据**时查了也挂不上（`attach` 会直接返回）——
-            // 这条判据与 `attach` 用的是同一个函数，省掉一次白遍历。
-            guard hasUsableWordLevelData(currentLyricsDto) else { return }
+            // 没有**可用的行级数据**时查了也挂不上（`attach` 会直接返回）——
+            // 这条判据必须与 `attach` 用的是同一个函数，省掉一次白遍历。
+            //
+            // ⚠️ 是**行级**不是逐字：`attach` 已经允许"有逐行、没逐字"的歌挂上
+            // （降级成当前行整行点亮）。这里如果还用 `hasUsableWordLevelData`，
+            // 那些歌的层一旦因为卡片复用而掉下来，看门狗就永远不再把它挂回去 ——
+            // 表现是"预览卡片里的歌词有时候自己没了、再也不回来"。
+            guard hasUsableLineLevelData(currentLyricsDto) else { return }
             // ⚠️ 全屏层正挂在屏上时**绝不**重挂预览层 —— 那会把全屏的层拽回卡片。
             guard !WordByWordHost.shared.fullscreenOverlayIsAttached else { return }
             // 已经挂上、而且还在窗口里 → 什么都不用做（这是常态，开销只有几次判空）。

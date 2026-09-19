@@ -198,6 +198,35 @@ func hasUsableWordLevelData(_ dto: LyricsDto?) -> Bool {
     return wordLevelLines * 10 >= lines.count * 5  // >= 50%
 }
 
+/// 逐**行**数据是否可用：时间同步 + 至少一半的行带 `offsetMs`。
+///
+/// 这是**降级档**的判据：有行级时间轴、但没有逐字时间轴时，我们不再整层撤走，
+/// 而是自己按行渲染（当前行整行点亮）。
+///
+/// ── 为什么必须补这一档（真机日志 11 实证）───────────────────────────────
+/// 网易云对一部分歌**根本没有 yrc**（逐字格式），日志里是：
+///     `[NetEase] eapi /api/song/lyric/v1 → yrc absent, ytlrc absent`
+///     `[NetEase] yrc unavailable — falling back to line-synced (lrc)`
+/// 这时只有 `hasUsableWordLevelData` 一道判据，于是：
+///     `[WordByWord] overlay detached`  ← 摘掉，之后再没挂上
+/// 我们的层一撤，Spotify 就把它**自己那一页**露出来 —— 日区是官方供应商
+/// 「プチリリ」，不带 (EeveeSpotify)。用户看到的就是"歌词源选 NE，
+/// 结果返回了 Spotify 自带的 petit 歌词"，而且我们自绘的壳、罗马化、
+/// 上下淡入淡出**全都一起消失**。
+///
+/// 所以撤层的真正条件应该是"**行级**都用不了"（无时间轴 / 静态歌词 / 还没拿到 dto），
+/// 而不是"没有逐字"。逐字只是高亮精度的一档，不该决定整层在不在。
+///
+/// 阈值与 `hasUsableWordLevelData` 一样取 50%：低于一半行有时间轴的数据
+/// （坏 lrc、只有零星几行带时间）按行渲染也是错位的，那种情况仍然交还原生。
+func hasUsableLineLevelData(_ dto: LyricsDto?) -> Bool {
+    guard let dto, dto.timeSynced else { return false }
+    let lines = dto.lines
+    guard !lines.isEmpty else { return false }
+    let timedLines = lines.filter { $0.offsetMs != nil }.count
+    return timedLines * 10 >= lines.count * 5  // >= 50%
+}
+
 /// 逐词歌词层的**纯色底色**（"只开逐词歌词、没开更好的逐词歌词"那条路用作背景）。
 ///
 /// 优先级与旧 overlay 原来的取色完全一致：
@@ -800,9 +829,15 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         // 文字色取决于背景明暗，而 rebuild() 已经按旧色建过标签了。
         configureBackdropIfNeeded()
 
-        // 只有「有足够多行真逐字 且 时间同步」才显示逐字；
-        // 否则（无逐字 / 坏逐字 / 静态歌词 / 还没加载到 dto）一律透明 + 隐藏标签，回退 Spotify 原生。
-        guard let dto, hasUsableWordLevelData(dto) else {
+        // 撤层的条件只要求**行级**可用，不要求逐字可用。
+        //
+        // ⚠️ 这条以前是 `hasUsableWordLevelData` —— 于是"有逐行、没逐字"的歌
+        // （网易云 `yrc absent` 那一批）会把整层撤走，露出 Spotify 官方供应商
+        // 「プチリリ」，并且把自绘壳 / 罗马化 / 上下淡入淡出一起带走。
+        // 现在降到行级：仍然由我们渲染，只是高亮精度退成"当前行整行点亮"
+        // （`applyHighlight` 在 `indices` 为空时本来就是整行全白，不需要另写一条渲染路）。
+        // 真正该撤的还是那三种：无时间轴 / 静态歌词 / 还没拿到 dto。
+        guard let dto, hasUsableLineLevelData(dto) else {
             backgroundColor = .clear
             backdropView.isHidden = true
             stackView.isHidden = true
@@ -1122,8 +1157,9 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     private func configureBackdropIfNeeded() {
         // ── 非卡拉 OK 状态：**整块透明，把屏幕交还给 Spotify 原生界面** ──────────
         //
-        // 什么时候走到这里：逐词歌词关掉、或这一首歌没有可用的词级时间轴。
+        // 什么时候走到这里：逐词歌词关掉、或这一首歌**连行级时间轴都没有**可用。
         // 此时这一层不该画任何东西 —— 连背景也不该画。
+        // （注意不是"没有逐字"：只有逐行的歌仍然由我们渲染，见下面的判据。）
         //
         // ⚠️ 这里以前会铺一块**不透明的底色**（`backgroundColor = targetBackground`）。
         // 那一块把 Spotify 原生那一页整个盖住了：标题栏、进度条、播放键全部被压掉，
@@ -1132,8 +1168,10 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         //
         // 而这一层本来的设计意图就是"渲染不了就交还"（见下面 `setCurrentTime` 里
         // 那个 guard 的注释）。不透明底色把这个退路堵死了。现在补回来。
+        // ⚠️ 判据与 `setCurrentTime` 必须一致，否则会出现"层被撤掉了但底色还在"
+        // 或者反过来"层还在但底色没了"——两者是同一层的一体两面。
         guard NgzhwmSettingsViewModel.isWordByWordLyricsEnabled,
-              hasUsableWordLevelData(currentLyricsDto) else {
+              hasUsableLineLevelData(currentLyricsDto) else {
             backgroundColor = .clear
             backdropView.isHidden = true
             // 同 `setCurrentTime`：整层交还原生时控制条也要一起交还。
@@ -1488,7 +1526,13 @@ final class WordByWordHost {
         detach()
 
         let sideInset = sideInset ?? 16
+        // 逐字可用 → 走逐字高亮；只有逐行 → 仍然由我们渲染（降级档）。
+        //
+        // ⚠️ 这两个值**必须分开**：`usable`（逐字）只用来决定"走不走 Apple Music 新层"
+        // 以及"高亮精度"；能不能挂上这一层要看 `lineLevelUsable`。
+        // 合成一个的话，"有逐行没逐字"那批歌就会掉回原生（见 `hasUsableLineLevelData` 的说明）。
         let usable = hasUsableWordLevelData(currentLyricsDto)
+        let lineLevelUsable = hasUsableLineLevelData(currentLyricsDto)
 
         // 系统版本够、开关打开、数据可用 → 走 Apple Music 渲染层。
         //
@@ -1634,7 +1678,11 @@ final class WordByWordHost {
 
         // 数据不可用时保持原生歌词，不做任何覆盖：
         // 铺一层空白背景比直接放行原生渲染更糟。
-        guard usable else { return false }
+        //
+        // ⚠️ 判据是**行级**：有逐行时间轴（哪怕没有逐字）也要挂上 —— 否则
+        // "网易云这首歌没有 yrc"就会让我们整层消失、露出 Spotify 官方供应商。
+        // 高亮精度退化成"当前行整行点亮"，见 `applyHighlight` 在无词数据时的行为。
+        guard lineLevelUsable else { return false }
 
         // ⚠️ 旧层同样不许挂到"整页大小"的视图上。
         //
@@ -1702,6 +1750,9 @@ final class WordByWordHost {
                 + " \(Int(view.bounds.width))x\(Int(view.bounds.height))"
                 + " shell=\(showsProviderFooter)"
                 + " sideInset=\(Int(sideInset))"
+                // 这一档要看得见：`word` = 逐字高亮，`line` = 这首歌没有逐字时间轴、
+                // 降级成"当前行整行点亮"（网易云 `yrc absent` 那一批就是它）。
+                + " level=\(usable ? "word" : "line")"
         )
         return true
     }
