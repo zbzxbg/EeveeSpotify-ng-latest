@@ -538,16 +538,19 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         }
 
         let insets = resolvedSafeAreaInsets
-        // 上下的渐隐高度都取这一份，保证"淡入的终点"与"歌词让位的起点"是同一个数 ——
-        // 两者只要差一点，就会出现"歌词已经开始了但还没淡完"（看着像被切一刀）。
-        let band = LyricsShellLayout.contentTopInset
+        // 渐隐带的**过渡宽度**（不是整条带子的高度，见下面两段）。
+        //
+        // ⚠️ 这个值别改回 `contentTopInset`(8)：8pt 的过渡在 3x 屏上只有 24 个像素，
+        // 观感是"一刀切"而不是淡入淡出 —— 真机反馈原话是"下方的淡出有点低"
+        // （淡出挤在最后 8pt 里，看着就像贴在底部的一条硬边）。
+        // 40 与「更好的逐词歌词」那条路的 `LyricsShellLayout.fadeBottomBand` 一致，
+        // 两条路的淡出手感才对得上。
+        let band = LyricsShellLayout.fadeBottomBand
 
-        // ── 上：标题栏整块铺底色，只在**紧贴第一行歌词**的那 `band` 里做淡入 ──────
+        // ── 上：标题栏整块铺底色，在**紧贴第一行歌词**的上方 `band` 里做淡入 ──────
         //
         // 用户要的是"淡入淡出放在歌手名字下面、播放条上面，像卡拉OK那样"。
-        // 歌手名字的底沿 = `安全区 + 标题栏高(62) + 内容呼吸(8)`，而这正好就是
-        // `updateLyricsInsetsIfNeeded()` 给歌词让位用的那个值（第一行歌词的 y）。
-        // 所以：
+        // 歌词让位的起点 = `安全区 + 标题栏高(62) + 内容呼吸(8)`，也就是第一行歌词的 y：
         //   · 0 … (headerBottom − band)  完全不透明 → 状态栏、歌名、歌手背后是干净底色，
         //     歌手名字**不会被渐变蹭到**（这一点很难返工，必须在第一次就做对）；
         //   · (headerBottom − band) … headerBottom  逐渐变透明 → 歌词正好从"歌手下方"
@@ -556,16 +559,21 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         // ⚠️ `headerBottom` 不再夹一个 `min(..., 1)`：原来那写法在极短屏/异常状态下会让
         // `headerBottom < band`，`topStop` 被夹成 0，于是 locations 变成 [0,0,1]，
         // 最上面那一段从第一像素起就开始透明 —— 底色整块失效。
-        let headerBottom = max(insets.top + LyricsShellLayout.headerHeight + band, band + 1)
+        let headerBottom = max(
+            insets.top + LyricsShellLayout.headerHeight + LyricsShellLayout.contentTopInset,
+            band + 1
+        )
         topFadeView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: headerBottom)
         topFadeLayer.colors = [base.cgColor, base.cgColor, clear.cgColor]
         let topStop = min(max(Double(max(headerBottom - band, 0) / headerBottom), 0), 1)
         topFadeLayer.locations = [0, NSNumber(value: topStop), 1]
 
-        // ── 下：控件栏顶部**上方** `band` 做淡出，控件栏整块（进度条 + 时间 + 三键）铺底色 ──
+        // ── 下：从控件栏顶部**往上** `band` 做淡出，控件栏整块（进度条 + 时间 + 三键）铺底色 ──
         //
         // 停靠点用的是新层那套名义值 `height − (安全区 + 116)`：它正好落在**进度条上沿之上**
         // （控件实际内容在它下面约 16pt），所以"淡出停在进度条上方"。
+        // 渐变向上铺满 `band`，于是淡出发生在"最后一行歌词下方到进度条之间"那段空白里，
+        // 不会等到贴着屏幕底才开始 —— 这就是"淡出太低"的修法。
         let footerTop = min(
             bounds.height - (max(insets.bottom, 8) + LyricsShellLayout.footerHeight),
             bounds.height
