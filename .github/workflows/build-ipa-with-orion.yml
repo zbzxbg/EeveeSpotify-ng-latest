@@ -1,0 +1,316 @@
+name: Build IPA (with Orion.framework)
+
+# 这个工作流的唯一目的：**把 Orion.framework 显式打进 IPA**，不再依赖 cyan 的
+# extras 自动兜底。
+#
+# ── 为什么需要它（真机日志实证）────────────────────────────────────────────
+# 原来的两个工作流（buildpatched.yml / build-and-release-yourself.yml）都是：
+#
+#     INJECT=("$DYLIB_SRC" "$FRAMEWORK_SRC" "$BUNDLE_SRC")
+#     cyan -i ... -f "${INJECT[@]}"
+#
+# 里面**没有 Orion.framework**。它们赌的是 cyan 的这段自动逻辑：
+#
+#     for dep in self.get_dependencies():        # otool -L
+#         if "orion." in dep.lower(): needed.add("orion.")
+#     for missing in needed:
+#         shutil.copytree(f"{self.install_dir}/extras/{real}", ip)
+#
+# 而 cyan 对注入相关的子进程普遍带 `stderr=subprocess.DEVNULL`，
+# 一旦 extras 缺文件或 copytree 失败，**不报错、不中断**，照样产出一个
+# "Frameworks/ 里只有 dylib" 的 IPA。装到设备上的表现是：
+#
+#     [01/01] FAIL EeveeSpotify.dylib: dlopen(...):
+#       Library not loaded: @rpath/Orion.framework/Orion
+#       Referenced from: .../Spotify.app/Frameworks/EeveeSpotify.dylib
+#
+# dylib 没加载 → hook 全不生效、启动失败。
+#
+# ── 这个工作流做了什么 ────────────────────────────────────────────────────
+#   1. 显式下载 Orion.framework（从本项目自己 release 里那份 Orion.zip，
+#      说明原文写着 "Orion Framework is provided in Orion.zip for those who need it"）；
+#   2. 校验拿到的是**真二进制**而不是 Theos 的 tapi stub（大小 + 架构两道检查）；
+#   3. 把 Orion.framework 一起传给 cyan；
+#   4. **构建后断言** Orion.framework 确实出现在 IPA 的 Frameworks/ 里，
+#      否则整个 job 失败 —— 让静默失败变成显式失败；
+#   5. 检查主程序有没有 `@executable_path/Frameworks` 这个 rpath，
+#      缺了就补上并重新签名（cyan 同样会静默失败的那一步）。
+#
+# ── 已知未验证项 ──────────────────────────────────────────────────────────
+# 这个文件是在没有 macOS/Theos 的环境下写的，逻辑对齐了已验证可用的
+# buildpatched.yml，但**没有实跑过**。第 5 步的 rpath 补丁是幂等的
+# （`if ! otool ... | grep -q`），最坏情况是那条 grep 的匹配行为需要微调。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "URL to a decrypted Spotify IPA"
+        default: ""
+        required: true
+        type: string
+      orion_url:
+        description: "URL to Orion.zip (leave default unless it 404s)"
+        default: "https://github.com/SideloadLabs/EeveeSpotifyReincarnated/releases/download/v6.6.4/Orion.zip"
+        required: true
+        type: string
+      upload_method:
+        description: "Where to upload the built IPA(s)"
+        default: "artifacts"
+        required: true
+        type: choice
+        options:
+          - artifacts
+          - filebin
+          - both
+
+env:
+  THEOS: ${{ github.workspace }}/theos
+  SWIFTPROTOBUF_VERSION: "1.29.0"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.1.1'
+
+      - name: Setup Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: ${{ github.workspace }}/theos
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          brew install make dpkg ldid wget
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          python3 -m pip install --upgrade --break-system-packages \
+              git+https://github.com/asdfzxcvbn/pyzule-rw.git
+          ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && SUFFIX=macos-amd64 || SUFFIX=macos-arm64
+          sudo curl -fsSL "https://github.com/asdfzxcvbn/ipapatch/releases/latest/download/ipapatch.${SUFFIX}" \
+              -o /usr/local/bin/ipapatch
+          sudo chmod +x /usr/local/bin/ipapatch
+          ipapatch --help >/dev/null
+
+      - uses: levibostian/action-hide-sensitive-inputs@v1
+
+      # ── 1. Orion.framework（本工作流存在的主要理由）────────────────────
+      - name: Fetch & validate Orion.framework
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/orion"; mkdir -p "$RUNNER_TEMP/orion"
+          wget "${{ inputs.orion_url }}" --no-verbose -O "$RUNNER_TEMP/Orion.zip"
+
+          # 固定这份 release 附件的 sha256；换 URL 时把这里一起改掉。
+          # 不匹配只 warn 不 fail —— 上游重新上传过附件的话不该挡住你。
+          EXPECTED="6316e49d487c29aa1ea03767fb8a78b5ea5588b609bdeb8bf6f4528537766658"
+          ACTUAL=$(shasum -a 256 "$RUNNER_TEMP/Orion.zip" | awk '{print $1}')
+          if [ "$EXPECTED" = "$ACTUAL" ]; then
+            echo "Orion.zip sha256 校验通过"
+          else
+            echo "::warning::Orion.zip sha256 与预期不符（expected $EXPECTED, got $ACTUAL）——继续，但请确认来源"
+          fi
+
+          unzip -q "$RUNNER_TEMP/Orion.zip" -d "$RUNNER_TEMP/orion"
+          FW=$(find "$RUNNER_TEMP/orion" -maxdepth 3 -type d -name 'Orion.framework' | head -1)
+          [ -n "$FW" ] || { echo "::error::Orion.zip 里找不到 Orion.framework"; exit 1; }
+
+          BIN="$FW/Orion"
+          [ -f "$BIN" ] || { echo "::error::$FW 里没有 Orion 这个二进制"; exit 1; }
+
+          # ⚠️ 两道检查，缺一不可：
+          #   · 大小：Theos 的 `make vendor` 会执行 `xcrun tapi stubify`，
+          #     vendor 里那份是**给编译器看的 stub**（几 KB）。拿它填进去照样
+          #     dlopen 失败，而且报错更难懂。真二进制约 215 KB。
+          #   · 架构：必须是 arm64，和 ARCHS = arm64 一致。
+          SIZE=$(stat -f%z "$BIN")
+          echo "Orion 二进制大小: $SIZE bytes"
+          [ "$SIZE" -gt 100000 ] || {
+            echo "::error::Orion 二进制只有 $SIZE 字节，像是 tapi stub 而不是真 framework"; exit 1; }
+
+          file "$BIN"
+          lipo -info "$BIN"
+
+          echo "ORION_FW=$FW" >> $GITHUB_ENV
+          echo "Orion.framework 就绪: $FW"
+
+      # ── 2. 从源码构建 deb ────────────────────────────────────────────────
+      - name: Build EeveeSwiftProtobuf.framework
+        run: |
+          chmod +x Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
+          Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
+
+      - name: Build .deb (rootless)
+        env:
+          REPO_SLUG: ${{ github.repository }}
+        run: |
+          THEOS_PACKAGE_SCHEME=rootless make package FINALPACKAGE=1
+          DEB_PATH=$(find packages -name "com.eevee.spotify_*.deb" | head -1)
+          [ -n "$DEB_PATH" ] || { echo "::error::deb not produced"; exit 1; }
+          echo "DEB_PATH=$DEB_PATH" >> $GITHUB_ENV
+          echo "deb: $DEB_PATH"
+
+      - name: Build zxPluginsInject.dylib
+        run: |
+          chmod +x Tools/build-zxpi.sh
+          Tools/build-zxpi.sh
+
+      - name: Download & validate vanilla IPA
+        run: |
+          wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/spotify.ipa
+          file_type=$(file --mime-type -b ${{ github.workspace }}/spotify.ipa)
+          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
+            echo "::error::Not a valid IPA: $file_type"; exit 1
+          fi
+
+      # ── 3. cyan 注入（Orion 显式参与）────────────────────────────────────
+      - name: Inject deb + Orion.framework into IPA (cyan)
+        run: |
+          set -euo pipefail
+          mkdir -p Outputs/IPAS
+          DEB_EXTRACT="$RUNNER_TEMP/deb-extract"; mkdir -p "$DEB_EXTRACT"
+          dpkg-deb -R "$DEB_PATH" "$DEB_EXTRACT"
+
+          DYLIB_SRC=$(find "$DEB_EXTRACT" -name 'EeveeSpotify.dylib' | head -1)
+          BUNDLE_SRC=$(find "$DEB_EXTRACT" -type d -name 'EeveeSpotify.bundle' | head -1)
+          FRAMEWORK_SRC=$(find "$DEB_EXTRACT" -type d -name 'EeveeSwiftProtobuf.framework' | head -1)
+          [ -n "$DYLIB_SRC" ] || { echo "::error::deb 里没有 EeveeSpotify.dylib"; exit 1; }
+
+          SPOT_VERSION=$(unzip -p ${{ github.workspace }}/spotify.ipa 'Payload/Spotify.app/Info.plist' \
+              | plutil -extract CFBundleShortVersionString raw - 2>/dev/null || echo "unknown")
+          EEVEE_VERSION=$(grep -E '^Version:' control | awk '{print $2}')
+          OUT="Outputs/IPAS/EeveeSpotify-${EEVEE_VERSION}-${SPOT_VERSION}-orion.ipa"
+
+          # ★ 与原工作流唯一的实质差别：Orion.framework 进 INJECT。
+          #   cyan 按 basename 分类，`.framework` 会被拷进 Payload/Spotify.app/Frameworks/。
+          INJECT=("$DYLIB_SRC" "$ORION_FW")
+          [ -n "$FRAMEWORK_SRC" ] && INJECT+=("$FRAMEWORK_SRC")
+          [ -n "$BUNDLE_SRC" ]    && INJECT+=("$BUNDLE_SRC")
+
+          echo "注入清单:"
+          printf '  - %s\n' "${INJECT[@]}"
+
+          cyan -i ${{ github.workspace }}/spotify.ipa -o "$OUT" \
+               -f "${INJECT[@]}" -c 9 -m 15.0 -du
+          echo "OUT_IPA=$OUT" >> $GITHUB_ENV
+
+      # ── 4. 断言：把静默失败变成显式失败 ──────────────────────────────────
+      - name: Verify Orion.framework actually landed in the IPA
+        run: |
+          set -euo pipefail
+          LISTING="$RUNNER_TEMP/ipa-listing.txt"
+          unzip -l "$OUT_IPA" > "$LISTING"
+
+          echo "== Frameworks/ 下的内容 =="
+          grep -E 'Frameworks/[^/]+/?$' "$LISTING" || true
+
+          TMPX="$RUNNER_TEMP/verify"; rm -rf "$TMPX"; mkdir -p "$TMPX"
+          unzip -q "$OUT_IPA" 'Payload/Spotify.app/Frameworks/EeveeSpotify.dylib' -d "$TMPX"
+          DY="$TMPX/Payload/Spotify.app/Frameworks/EeveeSpotify.dylib"
+
+          if otool -L "$DY" | grep -qi orion; then
+            echo "dylib 依赖: $(otool -L "$DY" | grep -i orion | head -1)"
+            if grep -q 'Frameworks/Orion.framework/Orion' "$LISTING"; then
+              echo "OK: IPA 里有 Frameworks/Orion.framework/Orion"
+            else
+              echo "::error::dylib 依赖 @rpath/Orion.framework/Orion，但 IPA 的 Frameworks/ 里没有它。"
+              echo "::error::cyan 的自动补注入没有生效（它对此类失败带 stderr=DEVNULL，会静默通过）。"
+              echo "::error::请检查上面列出的 Frameworks/ 内容，以及 ORION_FW 是否真的有二进制。"
+              exit 1
+            fi
+          else
+            echo "::warning::dylib 的 otool -L 里没有 orion 依赖 —— 说明编译期没链接到 Orion，hook 不会生效"
+          fi
+
+      # ── 5. rpath：cyan 同样会静默失败的那一步 ───────────────────────────
+      - name: Ensure @executable_path/Frameworks rpath, then add OpeninSafari extension
+        run: |
+          set -euo pipefail
+          cd "$(dirname "$OUT_IPA")"
+          rm -rf Payload
+          unzip -q "$(basename "$OUT_IPA")"
+          touch Payload/Spotify.app Payload/Spotify.app/Frameworks   # zip 时间戳
+          APP="Payload/Spotify.app"
+
+          echo "== 当前 LC_RPATH =="
+          otool -l "$APP/Spotify" | grep -A2 LC_RPATH || echo "(没有 LC_RPATH)"
+
+          if otool -l "$APP/Spotify" | grep -q '@executable_path/Frameworks'; then
+            echo "rpath 已存在，无需改动"
+          else
+            echo "缺少 @executable_path/Frameworks —— 补上"
+            ENT="$RUNNER_TEMP/ent.plist"
+            if ldid -e "$APP/Spotify" > "$ENT" 2>/dev/null && [ -s "$ENT" ]; then
+              echo "已导出原 entitlements ($(wc -c < "$ENT") 字节)"
+            else
+              ENT=""; echo "该二进制没有 entitlements"
+            fi
+
+            install_name_tool -add_rpath @executable_path/Frameworks "$APP/Spotify"
+
+            # 改过 load commands 之后原签名失效，必须重新签，否则装上去直接起不来
+            if [ -n "$ENT" ]; then
+              ldid -S"$ENT" "$APP/Spotify"
+            else
+              ldid -S "$APP/Spotify"
+            fi
+            echo "已重新签名"
+          fi
+
+          mkdir -p "$APP/PlugIns"
+          rm -rf "$APP/PlugIns/OpenSpotifySafariExtension.appex"
+          if git clone --depth 1 -q https://github.com/BillyCurtis/OpenSpotifySafariExtension.git \
+               "$RUNNER_TEMP/osp" 2>/dev/null && \
+             [ -d "$RUNNER_TEMP/osp/OpenSpotifySafariExtension.appex" ]; then
+            cp -R "$RUNNER_TEMP/osp/OpenSpotifySafariExtension.appex" \
+                  "$APP/PlugIns/OpenSpotifySafariExtension.appex"
+            echo "OpenSpotifySafariExtension 已注入"
+          else
+            echo "::warning::OpenSpotifySafariExtension 拉取失败，跳过（不影响 Orion）"
+          fi
+
+          rm -f "$(basename "$OUT_IPA")"
+          zip -qry "$(basename "$OUT_IPA")" Payload
+          rm -rf Payload
+
+      - name: Create Patched duplicate & LC-inject zxPluginsInject
+        run: |
+          PATCHED_OUT="${OUT_IPA%.ipa}-patched.ipa"
+          cp "$OUT_IPA" "$PATCHED_OUT"
+          ipapatch --input "$PATCHED_OUT" --inplace --noconfirm \
+                   --dylib packages/zxPluginsInject.dylib
+          echo "PATCHED_OUT=$PATCHED_OUT" >> $GITHUB_ENV
+
+      - name: Upload IPA artifact
+        if: ${{ inputs.upload_method == 'artifacts' || inputs.upload_method == 'both' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: EeveeSpotify-IPA-orion
+          path: |
+            ${{ env.OUT_IPA }}
+            ${{ env.PATCHED_OUT }}
+          if-no-files-found: error
+
+      - name: Upload IPA(s) to filebin.net
+        if: ${{ inputs.upload_method == 'filebin' || inputs.upload_method == 'both' }}
+        run: |
+          BIN="eevee-orion-${{ github.run_id }}-${{ github.run_attempt }}"
+          {
+            echo "### 📦 filebin.net download"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for IPA_PATH in "$OUT_IPA" "$PATCHED_OUT"; do
+            [ -n "$IPA_PATH" ] || continue
+            FILENAME=$(basename "$IPA_PATH")
+            curl -fsS -X POST -H "Content-Type: application/octet-stream" \
+                 --data-binary "@${IPA_PATH}" \
+                 "https://filebin.net/${BIN}/${FILENAME}" >/dev/null
+            echo "- **${FILENAME}:** https://filebin.net/${BIN}/${FILENAME}" >> "$GITHUB_STEP_SUMMARY"
+          done

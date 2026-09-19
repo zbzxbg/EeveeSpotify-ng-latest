@@ -967,7 +967,19 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             lineStack.spacing = 4
             lineStack.addArrangedSubview(label)
 
-            if showsTranslation, let translation = dto.translation, index < translation.lines.count {
+            // ⚠️ 这里必须**再查一次**「不展示网易云歌词翻译」开关。
+            //
+            // 光靠仓库层（`NeteaseLyricsRepository` 里 `isNeteaseHideTranslationEnabled`
+            // 时把 `translation` 置 nil）是不够的：开关是**运行时可变**的，
+            // 而 dto 可能是在开关还关着的时候取到的（换歌缓存、切歌时序、改设置不改歌），
+            // 那种情况下仓库层不会重跑，`dto.translation` 里仍然带着译文 ——
+            // 于是"开关明明开着，界面上还是显示翻译"。
+            // 显示层按开关自己再挡一道，两个条件都用 `&&` 而不是抄成一行，
+            // 是为了让"到底哪一条挡住的"在读代码时一眼可见。
+            let translationAllowed =
+                showsTranslation && !NgzhwmSettingsViewModel.isNeteaseHideTranslationEnabled
+
+            if translationAllowed, let translation = dto.translation, index < translation.lines.count {
                 let t = translation.lines[index]
                 if !t.isEmpty {
                     let translationLabel = UILabel()

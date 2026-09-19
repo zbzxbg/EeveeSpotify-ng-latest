@@ -623,29 +623,51 @@ extension LyricsDto {
         guard NgzhwmSettingsViewModel.isWordByWordLyricsEnabled,
               romanization == .canBeRomanized else { return self }
 
-        let language = lines.map(\.content).dominantCJKLanguageAbove(threshold: romajiLanguageThreshold)
-        guard let language else { return self }
+        // ── 首字母大写：**先做，且与罗马化开关无关** ──────────────────────────────
+        //
+        // ⚠️ 这里以前把大写和罗马化写在同一个循环里，并且上面那三个
+        // `guard ...Romanization else { return self }` 会**整个函数提前返回** ——
+        // 于是"用户把日语罗马化关掉"时，大写也一起被跳过，这一层显示的是
+        // 网易云原始文本（全小写）。
+        //
+        // 而喂给 Spotify 的那份（`toSpotifyLyricsData` → `LyricsDto.swift` 第 72 行）
+        // 是**无条件**做大写的。两边一对比就是用户看到的现象：
+        // 原生那层首字母大写、我们这层小写，"首字母有不大写"。
+        //
+        // 大写本来就不属于"罗马化"：它是与原生一致的显示约定（`capitalizingFirst
+        // LetterIfAlphabetic` 会跳过「」等装饰前缀与零宽字符）。所以拆出来先跑一遍，
+        // 罗马化再在它之上按需进行 —— 两个开关互不牵连。
+        var result = self
+        for i in result.lines.indices {
+            result.lines[i].content = result.lines[i].content.capitalizingFirstLetterIfAlphabetic()
+        }
+
+        let contentLines = result.lines.map(\.content)
+        let language = contentLines.dominantCJKLanguageAbove(threshold: romajiLanguageThreshold)
+        guard let language else {
+            // 这首歌没有占主导的 CJK 语言 → 没有罗马化可做，但大写已经生效。
+            return result
+        }
 
         let romanize: (String) -> String
         let isJapanese: Bool
         switch language {
         case .japanese:
-            guard UserDefaults.standard.bool(forKey: "ngzhwm_japaneseRomanization") else { return self }
+            guard UserDefaults.standard.bool(forKey: "ngzhwm_japaneseRomanization") else { return result }
             romanize = { $0.toJapaneseRomaji() }
             isJapanese = true
         case .simplifiedChinese, .traditionalChinese:
-            guard UserDefaults.standard.bool(forKey: "ngzhwm_chineseRomanization") else { return self }
+            guard UserDefaults.standard.bool(forKey: "ngzhwm_chineseRomanization") else { return result }
             romanize = { $0.toChinesePinyin() }
             isJapanese = false
         case .korean:
-            guard UserDefaults.standard.bool(forKey: "ngzhwm_koreanRomanization") else { return self }
+            guard UserDefaults.standard.bool(forKey: "ngzhwm_koreanRomanization") else { return result }
             romanize = { $0.toKoreanRomaja() }
             isJapanese = false
         default:
-            return self
+            return result
         }
 
-        var result = self
         for i in result.lines.indices {
             let originalContent = result.lines[i].content
             // 整行罗马化 + 首字母大写（与原生行级一致）
