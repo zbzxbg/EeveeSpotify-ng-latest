@@ -82,6 +82,10 @@ struct AppleMusicLyricsOverlayView: View {
 
     private static var profile: AppleMusicLyricsMotionProfile { .iOS26_6 }
 
+    /// 预览标题栏那一行的自然高度（15pt 文字 / 32pt 按钮，取按钮高度）。
+    /// 用途见 `headerTopInset`：把自绘标题行竖直居中在卡片标题栏那块高度里。
+    private static let previewHeaderRowHeight: CGFloat = 32
+
     /// 全屏（有壳）时才显示自绘标题栏与播放控制；内嵌预览那一小块不显示。
     private var showsShell: Bool { showsProviderFooter }
 
@@ -160,7 +164,14 @@ struct AppleMusicLyricsOverlayView: View {
                         : (showsProviderFooter ? 62 : 39),
                     // ⚠️ 预览必须传 0：卡片里 `safeArea.top == 0`，再用全屏那套 -30
                     // 会把整条标题栏推到卡片外面 —— 表现就是"预览一个按钮都没有"。
-                    headerTopInset: showsProviderFooter ? -30 : 0,
+                    //
+                    // 但预览也不能死贴卡片顶：卡片那块标题栏高度（`previewHeaderInset`，
+                    // 实测 64）比我们这一行（≈32）高，Spotify 原来那一行是**竖直居中**的
+                    // （卡片上留 16pt，行本身 48）。这里补上同样的居中偏移，
+                    // 自绘的「歌词」才会落在原生那一行的位置上。
+                    headerTopInset: showsProviderFooter
+                        ? -30
+                        : max((previewHeaderInset - Self.previewHeaderRowHeight) / 2, 0),
                     // 预览不参与"划动收起壳"：那张小卡片上收起壳只会剩一片空白。
                     hidesShellOnScroll: showsProviderFooter,
                     // 预览：底部淡出按**离底部的固定距离**压住，不再吃比例。

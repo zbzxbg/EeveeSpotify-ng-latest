@@ -1544,20 +1544,27 @@ final class WordByWordHost {
     ///
     /// 所以现在按**证据强弱**排四条判据（见下），全不成立就返回 nil：
     /// 调用方据此**宁可不挂**，由看门狗在卡片建好之后再挂一次。
+    ///
+    /// 四条的顺序（每次都是被真机日志打回来才定下来的）：
+    ///   ① `…CardView` 类名 —— 最硬；② 含标题栏按钮、且**尺寸仍像卡片**的最外层祖先
+    ///   （日志 5：只取最近一层会挂到卡片内部的内容列上，比卡片小一圈）；
+    ///   ③ 收紧的尺寸判据；④ 容器白名单。②③④ 都是"Spotify 改了名字"时的退路。
     static func cardContainer(for view: UIView) -> UIView? {
-        // ① 语义：最近的、子树里含歌词标题栏按钮（展开 / 分享）的祖先。
-        //    卡片 = 歌词内容 + 标题栏那一行；按钮和内容同在卡片里，这是最硬的证据。
-        //    （封面容器里没有这两颗按钮，因此不会被误判。）
-        if let card = ancestorContainingLyricsHeaderButtons(of: view) {
-            return logAndReturnCardContainer(card, lyrics: view, label: "header buttons")
-        }
-
-        // ② 类名：卡片本体。它含 `CardHeaderView`（"歌词" + 分享/展开那一行）
-        //    + `CardContentView`，我们那层壳正是要盖住整张卡片。
-        //    只匹配到 `CardContentView` 的后果已在真机截图实证：**两层壳** ——
-        //    Spotify 的标题栏露在外面，我们又画了一个，尺寸还完全相同。
+        // ① 类名：卡片本体。这是最硬的证据（名字就叫 CardView），而且它正是"整张卡片"
+        //    那一层 —— 我们要盖住的就是它（含它自己的标题栏与四周留白）。
+        //
+        //    ⚠️ 必须排在"含标题栏按钮"那条**前面**：日志 5 实证，那条判据最近的命中是
+        //    卡片内部的**内容列**（`UIStackView 342x304` = 标题行 + 歌词两行），
+        //    挂上去比真卡片小一圈（真卡片 374x320）—— 表现就是"挂是挂上了，大小不对"：
+        //    左右各留 16pt 粉边、上方还露出 Spotify 自己的「歌词」标题栏。
         if let card = ancestor(in: view, matching: Self.preferredCardClassNames) {
             return logAndReturnCardContainer(card, lyrics: view, label: "card")
+        }
+
+        // ② 语义：含歌词标题栏按钮、且尺寸仍然"像卡片"的**最外层**祖先。
+        //    只在类名认不出来（Spotify 改名）时才会走到这里。
+        if let card = ancestorCardSizedWithLyricsHeaderButtons(of: view) {
+            return logAndReturnCardContainer(card, lyrics: view, label: "header buttons")
         }
 
         // ③ 尺寸（**收紧**）：卡片只比歌词内容高出一个标题栏的量级。
@@ -1603,25 +1610,42 @@ final class WordByWordHost {
     /// 卡片相对歌词内容允许高出的范围：只比内容高一点（标题栏），不能是一个大容器。
     private static let previewMinCardExtraHeight: CGFloat = 4
     private static let previewCardMaxExtraHeight: CGFloat = 140
+    /// 卡片相对歌词内容允许宽出的范围（左右各一点内边距，实测 16pt/侧）。
+    private static let previewCardMaxExtraWidth: CGFloat = 60
     /// 卡片本体的合理高度上限：超过它就不是卡片，而是整页 / 滚动容器。
     private static let previewCardMaxHeight: CGFloat = 500
 
-    /// 从 `view` 往上找最近的、子树里含「歌词标题栏按钮」的祖先（最多 12 层、高度受限）。
+    /// 从 `view` 往上，取"含歌词标题栏按钮、且尺寸仍然像卡片"的**最外层**祖先。
     ///
-    /// 高度上限用**绝对值**而不是"相对歌词内容"：卡片刚建出来、歌词内容还没布局时
-    /// 内容高度会小得离谱，相对判据会把真卡片也一起否定掉。
-    private static func ancestorContainingLyricsHeaderButtons(of view: UIView) -> UIView? {
+    /// 为什么强调"最外层"：日志 5 实证，这类容器是**一层套一层**的 ——
+    /// 最近的那层是卡片内部的"内容列"（`UIStackView 342x304` = 标题行 48 + 歌词 256），
+    /// 外面才是真正的卡片（`Lyrics_CardElementImpl.CardView 374x320`）。
+    /// 只取最近一层，挂出来的层就比卡片小一圈（左右各留 16pt、上方露出原生「歌词」标题栏）。
+    ///
+    /// 两个闸门都是"相对歌词内容"的（宽度 + 高度），一超就**停**：祖先只会越来越大，
+    /// 一旦某一层超了（包住卡片的 cell / 滚动容器 / 整页），再往上没有意义。
+    /// 高度另有一个绝对值上限（`previewCardMaxHeight`）兜底。
+    private static func ancestorCardSizedWithLyricsHeaderButtons(of view: UIView) -> UIView? {
         var node: UIView? = view.superview
         var depth = 0
+        var result: UIView?
         while let current = node, depth < 12 {
-            if current.bounds.height <= Self.previewCardMaxHeight,
+            let extraHeight = current.bounds.height - view.bounds.height
+            let extraWidth = current.bounds.width - view.bounds.width
+            guard current.bounds.height <= Self.previewCardMaxHeight,
+                  extraHeight <= Self.previewCardMaxExtraHeight,
+                  extraWidth <= Self.previewCardMaxExtraWidth else {
+                break
+            }
+            // 等高/等宽的包装层不算候选，但要继续往上找（真卡片在它们外面）。
+            if extraHeight >= Self.previewMinCardExtraHeight,
                containsLyricsHeaderButton(current) {
-                return current
+                result = current
             }
             node = current.superview
             depth += 1
         }
-        return nil
+        return result
     }
 
     /// 子树里有没有歌词标题栏那一行（展开 / 分享）的按钮。

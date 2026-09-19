@@ -259,6 +259,13 @@ struct AppleMusicLyricsPage: View {
                     - contentInsets.trailing,
                 1
             )
+            // ⚠️ 宿主还没布局完时（第一帧 `geometry.size.width == 0`）**不要**去排歌词。
+            //
+            // 那时 availableWidth 会被 `max(…, 1)` 夹成 1，折行构建器按 1pt 宽度算出来就是
+            // **一个字一行**（日志里那些 `[LyricWrap] … w=1.0 breaks=[1,2,3,5,…]`），
+            // 挂载/切全屏的那一帧会闪一下"竖排字"。
+            // 这一帧干脆什么都不画（下一帧宽度就正常了），比画错再改好。
+            let hasUsableWidth = availableWidth >= 80
             // 自绘壳占掉的高度：从安全区再往里让，避免歌词钻到标题栏/控件栏底下。
             //
             // 62 / 116 是量出来的，不是拍的：
@@ -288,7 +295,9 @@ struct AppleMusicLyricsPage: View {
                 background
                     .ignoresSafeArea()
 
-                ScrollViewReader { proxy in
+                // 宽度还没量出来（第一帧）→ 不排歌词，见上面 `hasUsableWidth` 的说明。
+                if hasUsableWidth {
+                    ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(
                             alignment: .leading,
@@ -408,6 +417,7 @@ struct AppleMusicLyricsPage: View {
                             endPoint: .bottom
                         )
                     )
+                }
                 }
 
                 // 右上角：自绘关闭键优先，其次才是内置的圆按钮。
