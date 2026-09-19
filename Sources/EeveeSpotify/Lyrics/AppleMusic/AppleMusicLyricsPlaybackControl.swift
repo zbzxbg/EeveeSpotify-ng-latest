@@ -284,12 +284,38 @@ enum WordByWordPlaybackControl {
 
     // MARK: 关闭全屏
 
+    /// "正在关全屏"的过程级闸门（见 `dismissFullscreen` 的说明）。
+    ///
+    /// 与 `sendTap` 里的 `isForwardingTap` 是**互补**的两道：那道挡住
+    /// "任意转发动作的重入"，这道专门挡住"关全屏"这一条 —— 因为它是唯一
+    /// 一个**由我们自己触发、又会把整个全屏页拆掉**的动作，一旦成环，
+    /// 连转场动画都会参与进来，比其它几颗按钮危险得多。
+    private static var isDismissing = false
+
     /// 关闭全屏歌词页。
     ///
     /// 优先点原生那个 chevron（走 Spotify 自己的返回逻辑，层级、动画、状态都由它
     /// 负责，比我们 `dismiss` 稳），找不到才退回 `dismiss(animated:)`。
+    ///
+    /// ⚠️ 这里有**两道**防自反馈的闸，缺一不可：
+    ///   1. `findTransportButton` 里的 `isOwnControl`：按具体控件排除我们自己的壳；
+    ///   2. 下面这个 `isDismissing`：按**调用过程**排除重入。
+    ///
+    /// 第 1 道是"别选中自己"，但它依赖"我们的控件能被认出来"——
+    /// 而真机崩溃报告（`Spotify-2026-09-19-100944.ips`）显示，一次
+    /// `-[UIApplication sendAction:to:from:forEvent:]` 触发的主线程递归
+    /// 一路把栈打穿（命中 `Stack Guard`）。那说明**光靠控件识别是不够的**：
+    /// 只要"转发出去的动作最终又回到关全屏"，就会无限递归。
+    /// 所以这里加一道过程级的闸：关全屏这件事没走完，绝不再发起第二次。
     @discardableResult
     static func dismissFullscreen() -> Bool {
+        guard !isDismissing else {
+            writeDebugLog("[Shell] ⚠️ dismissFullscreen re-entry blocked — 防止递归卡死")
+            return false
+        }
+        isDismissing = true
+        defer { isDismissing = false }
+
         if let button = findTransportButton(labels: closeLabels, exactMatch: true) {
             writeDebugLog("[Shell] dismiss via native close button")
             sendTap(to: button)
@@ -519,7 +545,43 @@ enum WordByWordPlaybackControl {
         return false
     }
 
+    /// 我们自己的"转发点击"是否正在往下走（重入闸门）。
+    ///
+    /// 见 `sendTap`：`sendActions(for:)` 是**同步**的，被点中的控件如果其动作
+    /// 最终又回到我们的转发入口，就会一路递归到爆栈。
+    private static var isForwardingTap = false
+
+    /// 发一个 `touchUpInside` 给原生控件（本模块唯一的点击派发点）。
+    ///
+    /// ⚠️⚠️ **重入闸门不能删。** `sendActions(for:)` 是同步的：被点中的控件，
+    /// 它的 action 会在**这次调用返回之前**跑完。如果那个 action 最终又走到本模块
+    /// 的任何一个转发入口（`dismissFullscreen` / `togglePlayPause` /
+    /// `skipToNext` / `skipToPrevious` / `tapNativeControl`），就会变成
+    /// "点自己 → 又点自己 → …"，主线程栈一路耗尽，最后不是普通闪退，
+    /// 而是**卡死**（栈保护页触发 SIGSEGV，真机表现就是"歌还在放、界面全死"）。
+    ///
+    /// 真机崩溃报告实证（`Spotify-2026-09-19-100944.ips`）：
+    ///   `-[UIApplication sendAction:to:from:forEvent:]` → `-[UIControl sendAction:to:forEvent:]`
+    ///   → EeveeSpotify.dylib 的动作实现 → 同一函数连刷 8 帧 → 递归到
+    ///   `StringProtocol.replacingOccurrences` 深处 → 命中 `Stack Guard` 区。
+    /// 这个项目里为同一类问题已经栽过两次（`dismissFullscreen` 找到自己画的
+    /// "close" 按钮、`LyricsShellChrome.close` 用 `UIControl`），
+    /// 但那两次都是**按具体控件**打补丁；这里补的是**结构性**的一道闸：
+    /// 一次转发没走完，绝不允许再发起第二次转发。
+    ///
+    /// 为什么不会误伤正常操作：SwiftUI/UIKit 的按钮回调都是同步跑完就返回的，
+    /// 用户不可能在这一次派发还没返回时再点第二下。真正会被挡住的只有
+    /// "转发 → 动作 → 又转发"这种自反馈环，那正是要挡的。
     private static func sendTap(to control: UIControl) {
+        guard !isForwardingTap else {
+            writeDebugLog(
+                "[Shell] ⚠️ sendTap re-entry blocked on \(kind(control))"
+                    + " label=\"\(control.accessibilityLabel ?? "")\" — 防止递归卡死"
+            )
+            return
+        }
+        isForwardingTap = true
+        defer { isForwardingTap = false }
         control.sendActions(for: .touchUpInside)
     }
 

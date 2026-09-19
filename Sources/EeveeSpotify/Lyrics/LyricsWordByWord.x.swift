@@ -483,11 +483,37 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         max(bounds.width - 2 * lyricsSideInset, 1)
     }
 
+    /// 把两条渐隐带的图层对齐到各自的视图。
+    ///
+    /// ⚠️⚠️ **这两行是"上下淡入淡出根本不出现"的唯一原因，别再删掉。**
+    ///
+    /// `CAGradientLayer` 是**手动** `addSublayer` 上去的，不参与 Auto Layout，
+    /// 新建时 `frame` 是 `.zero` —— 而下面 `updateFadeLayers()` 从头到尾只改
+    /// `topFadeView.frame` / `bottomFadeView.frame` 和渐变的 `colors`/`locations`，
+    /// **从来没给过这两个图层尺寸**。一个 0x0 的渐变图层画不出任何像素，
+    /// 于是那两条"铺底色 + 淡出"的带子等于不存在：
+    ///   · 全屏（有壳）：标题栏、进度条、时间、三键背后是干净的透明，
+    ///     歌词直接从它们**底下穿过去** —— 真机截图里"歌曲名压在第一行歌词上"、
+    ///     "三键压在一行歌词上"就是这个；
+    ///   · 预览（无壳）：卡片上下两端没有渐隐，进出视口的行是硬切。
+    ///
+    /// 对照：`LyricsBackdropArtworkView` 那个同类渐变层是在 `layoutSubviews()`
+    /// 里 `gradientLayer.frame = bounds` 的，所以它的背景一直正常 ——
+    /// 两处只有一处写了尺寸，这就是差别。
+    ///
+    /// 放在 `updateFadeLayers()` 里（而不是 `layoutSubviews`）是因为两个视图的
+    /// `frame` 就是在那里设的，尺寸与位置必须成对更新，否则会差一帧。
+    private func syncFadeLayerFrames() {
+        topFadeLayer.frame = topFadeView.bounds
+        bottomFadeLayer.frame = bottomFadeView.bounds
+    }
+
     /// 淡出带（scrim）的几何 + 颜色 + 渐变停靠点。
     ///
     /// ⚠️ 颜色与 `locations` 必须**成对、在同一处**设置：`CAGradientLayer` 要求两者
     /// 数量一致，一处只设 colors、另一处只设 locations 会画出花屏甚至直接崩。
     /// 所以这里统一算，`configureBackdropIfNeeded` 只负责把底色算出来。
+    /// 尺寸交给上面的 `syncFadeLayerFrames()`（`frame` 变了它必须跟着变）。
     private func updateFadeLayers() {
         let base = resolvedBackgroundColor ?? .black
         let clear = base.withAlphaComponent(0)
@@ -507,20 +533,36 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             )
             bottomFadeLayer.colors = [clear.cgColor, base.cgColor]
             bottomFadeLayer.locations = [0, 1]
+            syncFadeLayerFrames()
             return
         }
 
         let insets = resolvedSafeAreaInsets
-        let band = LyricsShellLayout.fadeBottomBand
+        // 上下的渐隐高度都取这一份，保证"淡入的终点"与"歌词让位的起点"是同一个数 ——
+        // 两者只要差一点，就会出现"歌词已经开始了但还没淡完"（看着像被切一刀）。
+        let band = LyricsShellLayout.contentTopInset
 
-        // 上：0 → 标题栏下沿整块铺底色，最后 `band` 做淡入（淡入落在歌手下方）。
-        let headerBottom = max(insets.top + LyricsShellLayout.headerHeight, 1)
+        // ── 上：标题栏整块铺底色，只在**紧贴第一行歌词**的那 `band` 里做淡入 ──────
+        //
+        // 用户要的是"淡入淡出放在歌手名字下面、播放条上面，像卡拉OK那样"。
+        // 歌手名字的底沿 = `安全区 + 标题栏高(62) + 内容呼吸(8)`，而这正好就是
+        // `updateLyricsInsetsIfNeeded()` 给歌词让位用的那个值（第一行歌词的 y）。
+        // 所以：
+        //   · 0 … (headerBottom − band)  完全不透明 → 状态栏、歌名、歌手背后是干净底色，
+        //     歌手名字**不会被渐变蹭到**（这一点很难返工，必须在第一次就做对）；
+        //   · (headerBottom − band) … headerBottom  逐渐变透明 → 歌词正好从"歌手下方"
+        //     开始淡入，而不是凭空出现。
+        //
+        // ⚠️ `headerBottom` 不再夹一个 `min(..., 1)`：原来那写法在极短屏/异常状态下会让
+        // `headerBottom < band`，`topStop` 被夹成 0，于是 locations 变成 [0,0,1]，
+        // 最上面那一段从第一像素起就开始透明 —— 底色整块失效。
+        let headerBottom = max(insets.top + LyricsShellLayout.headerHeight + band, band + 1)
         topFadeView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: headerBottom)
         topFadeLayer.colors = [base.cgColor, base.cgColor, clear.cgColor]
         let topStop = min(max(Double(max(headerBottom - band, 0) / headerBottom), 0), 1)
         topFadeLayer.locations = [0, NSNumber(value: topStop), 1]
 
-        // 下：控件栏顶部**上方** `band` 做淡出，控件栏整块（进度条 + 时间 + 三键）铺底色。
+        // ── 下：控件栏顶部**上方** `band` 做淡出，控件栏整块（进度条 + 时间 + 三键）铺底色 ──
         //
         // 停靠点用的是新层那套名义值 `height − (安全区 + 116)`：它正好落在**进度条上沿之上**
         // （控件实际内容在它下面约 16pt），所以"淡出停在进度条上方"。
@@ -534,6 +576,8 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         bottomFadeLayer.colors = [clear.cgColor, base.cgColor, base.cgColor]
         let bottomStop = min(max(Double(band / span), 0), 1)
         bottomFadeLayer.locations = [0, NSNumber(value: bottomStop), 1]
+
+        syncFadeLayerFrames()
     }
 
     /// 设置背景样式：全屏传 `.stage`（溢出铺满整屏、均匀暗化），
