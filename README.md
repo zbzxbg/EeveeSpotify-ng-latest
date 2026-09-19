@@ -7,7 +7,7 @@ The contents of this repository will be updated when EeveeSpotify-ng or EeveeSpo
 | | Version |
 | --- | --- |
 | Latest public release | v0.1.0 |
-| Current development version | [v1.0.0-beta.1](CHANGELOG.md)|
+| Current development version | v1.0.0-beta.7(Spotify 9.1.84)) |
 | Development version last updated | 2026/09/19 |
 
 ## ⚠️ Notice
