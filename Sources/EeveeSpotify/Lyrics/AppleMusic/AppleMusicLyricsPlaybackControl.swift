@@ -622,7 +622,7 @@ struct AppleMusicLyricsControls: View {
                 )
             }
             .font(.system(size: 11, weight: .medium).monospacedDigit())
-            .foregroundStyle(primaryColor.opacity(0.62))
+            .foregroundColor(primaryColor.opacity(0.62))
             .padding(.horizontal, 20)
             .padding(.top, 3)
 
@@ -659,7 +659,7 @@ struct AppleMusicLyricsControls: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .medium))
-                .foregroundStyle(primaryColor)
+                .foregroundColor(primaryColor)
                 .frame(width: size + 26, height: size + 26)
                 .contentShape(Rectangle())
         }

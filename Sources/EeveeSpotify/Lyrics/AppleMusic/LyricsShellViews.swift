@@ -34,6 +34,10 @@ enum LyricsShellLayout {
 }
 
 /// 三块壳内容（不含外边距）。
+///
+/// ⚠️ 这里只能用 **iOS 14 就能用**的 SwiftUI API：旧渲染层在 iOS 14 上也要跑，
+/// 而它现在共用这份壳。最容易踩的就是 `foregroundStyle`（iOS 15+）——
+/// 统一用 `foregroundColor`（iOS 13+）；颜色语义在这几处完全一样。
 enum LyricsShellChrome {
 
     /// 顶部：曲名 + 歌手（居中）。
@@ -42,11 +46,11 @@ enum LyricsShellChrome {
             VStack(spacing: 2) {
                 Text(title)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(primaryColor)
+                    .foregroundColor(primaryColor)
                     .lineLimit(1)
                 Text(artist)
                     .font(.system(size: 12))
-                    .foregroundStyle(primaryColor.opacity(0.72))
+                    .foregroundColor(primaryColor.opacity(0.72))
                     .lineLimit(1)
             }
             .padding(.horizontal, 56)
@@ -80,7 +84,7 @@ enum LyricsShellChrome {
             Button(action: onClose) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(primaryColor)
+                    .foregroundColor(primaryColor)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -96,9 +100,13 @@ enum LyricsShellChrome {
 /// 排版照抄 `AppleMusicLyricsPage` 里那段：
 ///   · 标题栏 `headerContent.padding(.top, safeArea.top + headerTopInset)`
 ///   · 关闭键 `.padding(.top, safeArea.top + 6).padding(.trailing, 12)`
+///
+/// ⚠️ `title` / `artist` 必须是 `var`：换歌时由 `LyricsShellHosts.update(title:artist:)`
+/// 直接改 `rootView` 上的这两个字段（改了就重绘），声明成 `let` 会在那一行报
+/// "不能对不可变属性赋值"。
 struct LyricsShellHeaderHost: View {
-    let title: String
-    let artist: String
+    var title: String
+    var artist: String
     let primaryColor: Color
     let onClose: () -> Void
 
