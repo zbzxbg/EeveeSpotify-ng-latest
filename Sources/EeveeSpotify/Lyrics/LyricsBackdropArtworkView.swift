@@ -49,8 +49,9 @@ enum LyricsArtworkResolver {
             //
             // ⚠️ 这里读到的 `has_lyrics` 是**被 `SPTPlayerTrackHook` 改写之后**的值
             // （覆写生效的话永远是 "true"），**不能**用来判断 Spotify 的原始判定。
-            // 要看原始值请查 `[TrackHook] metadata() called — original has_lyrics=…`
-            // （在 `CustomLyrics+AllTracksLyrics.x.swift` 的覆写里，改写之前打印）。
+            // 而且实测已经证明：**面 B 的门控根本不是这个键** —— 覆写每次都返回 true，
+            // 面 B 依然只有 SECRET 出现。详见 `CustomLyrics+AllTracksLyrics.x.swift` 里
+            // `SPTPlayerTrackHook.metadata()` 上方的说明。
             writeDebugLog("[Artwork] metadata keys: \(metadata.keys.sorted())")
         }
 

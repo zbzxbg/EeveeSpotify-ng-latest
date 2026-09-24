@@ -43,14 +43,26 @@ enum SpotifyResponsePatcher {
     /// 所以：**如果它在线上，就能在响应里改** —— 那样 Swift 解析出来的字段一开始就是
     /// `true`，门控自然通过。这跟 hook getter 完全是两回事。
     ///
-    /// 本函数**只读、只打日志、不修改任何字节**；同一 path 只报一次。
+    /// 本函数**只读、只打日志、不修改任何字节**。
     private static var _probeReportedPaths = Set<String>()
-    /// 每个 task 上一块数据的尾巴：`has_lyrics` 可能正好被 chunk 边界切断，
+    /// 每个 task 上一块数据的尾巴：关键字可能正好被 chunk 边界切断，
     /// 不带上这个尾巴就会漏报，进而把"在线上"误判成"不在线上"。
     private static var _probeCarry: [Int: Data] = [:]
+    /// **存活信号**。没有它，"一条都没命中"和"探针压根没编进包里"分不出来 —— 日志 10 就
+    /// 栽在这里：唯一的输出只在命中时打，于是空日志既可能是"不在线上"，也可能是"没构建"。
+    private static var _probeAnnounced = false
+    private static var _probeScanned = 0
+    /// 见过哪些端点（最多 40 条）。没命中时靠它判断"覆盖面够不够" ——
+    /// 如果连播放器状态类的端点都没扫到，就不能下"不在线上"的结论。
+    private static var _probeSeenPaths = Set<String>()
 
     static func probeHasLyricsKey(url: URL, taskID: Int, data: Data) {
-        guard !data.isEmpty, let needle = "has_lyrics".data(using: .ascii) else { return }
+        guard !data.isEmpty else { return }
+
+        // 两种拼法都扫：字典里的键是 `has_lyrics`，但**线上**未必是蛇形 ——
+        // 服务端 JSON / protobuf 都可能用 `hasLyrics`。
+        let needles = ["has_lyrics", "hasLyrics"].compactMap { $0.data(using: .ascii) }
+        guard !needles.isEmpty else { return }
 
         lock.lock()
         let carry = _probeCarry[taskID] ?? Data()
@@ -58,18 +70,42 @@ enum SpotifyResponsePatcher {
         window.reserveCapacity(carry.count + data.count)
         window.append(carry)
         window.append(data)
-        let hit = window.range(of: needle) != nil
-        // 只留 needle.count - 1 字节，够拼上下一块的开头即可。
-        _probeCarry[taskID] = Data(data.suffix(needle.count - 1))
+
+        let hit = needles.contains { window.range(of: $0) != nil }
+
+        // 只留够拼上下一块开头的那几个字节。
+        _probeCarry[taskID] = Data(data.suffix(9))
         if _probeCarry.count > 128 { _probeCarry.removeAll() }   // 兜底：别让它无限长
-        let isNew = hit && _probeReportedPaths.insert(url.path).inserted
+
+        _probeScanned += 1
+        let announce = !_probeAnnounced
+        if announce { _probeAnnounced = true }
+
+        var newPath: String?
+        if _probeSeenPaths.count < 40, _probeSeenPaths.insert(url.path).inserted {
+            newPath = url.path
+        }
+
+        let isNewHit = hit && _probeReportedPaths.insert(url.path).inserted
+        let hitCount = _probeReportedPaths.count
+        let scanned = _probeScanned
         lock.unlock()
 
-        guard isNew else { return }
-        writeDebugLog(
-            "[HasLyricsProbe] hit — host=\(url.host ?? "?") path=\(url.path)"
-                + " chunk=\(data.count)B"
-        )
+        if announce {
+            writeDebugLog("[HasLyricsProbe] active — scanning response chunks")
+        }
+        if let newPath {
+            writeDebugLog("[HasLyricsProbe] seen path=\(newPath)")
+        }
+        if isNewHit {
+            writeDebugLog(
+                "[HasLyricsProbe] HIT — host=\(url.host ?? "?") path=\(url.path)"
+                    + " chunk=\(data.count)B"
+            )
+        }
+        if scanned % 500 == 0 {
+            writeDebugLog("[HasLyricsProbe] scanned=\(scanned) chunks, hits=\(hitCount)")
+        }
     }
 
     static func shouldBlock(_ url: URL) -> Bool {

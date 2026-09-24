@@ -3,11 +3,6 @@ import UIKit
 
 private var shouldOverrideLocalTrackURI = false
 
-/// 上一次打过 `[TrackHook]` 日志的曲目 —— 换歌才打。
-///
-/// `metadata()` 会被高频调用（封面解析、播放状态刷新都会走），不设这道闸门会刷屏。
-private var lastTrackHookLoggedURI = ""
-
 class SPTPlayerTrackHook: ClassHook<NSObject> {
     typealias Group = BaseLyricsGroup
     static let targetName = EeveeSpotify.hookTarget == .latest
@@ -17,28 +12,16 @@ class SPTPlayerTrackHook: ClassHook<NSObject> {
     func metadata() -> [String: String] {
         var meta = orig.metadata()
 
-        // ── 诊断：这条覆写到底有没有被调用，以及 Spotify 给的**原始**值是多少 ──
+        // 诊断日志已移除 —— 它的使命完成了：
+        //   · 确认了这条覆写**确实被调用**（日志 9/10 里数百行 `[TrackHook]`）；
+        //   · 拿到了原始值：失败曲目 `spotify:track:5utfun3R35e5AsBalPSxBe` ⇒ `false`；
+        //   · 结论：**面 B 的门控不是这个键** —— 覆写每次都返回 `has_lyrics = "true"`，
+        //     面 B 却依然只有 SECRET 出现。说明门控读的是 Swift 内部字段、走静态派发，
+        //     ObjC 侧 getter 的改写到不了它那里（与取证报告证据 6 一致）。
         //
-        // 为什么必须打在这里：`[Artwork] has_lyrics=` 那处（`LyricsBackdropArtworkView`）
-        // 只走 Apple Music 预览层的封面解析，而那条路**要求面 B 已经存在** —— 于是
-        // "面 B 没出现的歌"永远打不出它们的值（日志 8 里全日志只有 SECRET 一条，白测了）。
-        //
-        // 而这个方法**每首歌都会被调用**，并且能拿到我们改写**之前**的值 —— 正是需要
-        // 对照的那个数。
-        //
-        // 判读：
-        //   · 三首打出 `has_lyrics=false`/`<nil>`、SECRET 打出 `true` → 面 B 的门控就是它；
-        //   · 这里**一行都没有** → 覆写压根没被调用（尽管类和方法表都存在）；
-        //   · 四首全是 `true` → 覆写生效了，那 `has_lyrics` 就**不是**面 B 的判据。
-        let uri = meta["entity_uri"] ?? "?"
-        if uri != lastTrackHookLoggedURI {
-            lastTrackHookLoggedURI = uri
-            writeDebugLog(
-                "[TrackHook] metadata() called — original has_lyrics="
-                    + "\(meta["has_lyrics"] ?? "<nil>") uri=\(uri)"
-            )
-        }
-
+        // 移除它的另两个理由：`metadata()` 在热路径上（一次会话刷几百行）；而且去重用的
+        // 全局变量是**无锁**的，被多线程交错写 `var` 有踩坑风险。
+        // 将来若要验证"线上改完之后这个值有没有变"，再加回来即可。
         meta["has_lyrics"] = NgzhwmSettingsViewModel.isLyricsFeatureDisabled ? "false" : "true"
         return meta
     }
