@@ -27,6 +27,51 @@ enum SpotifyResponsePatcher {
         return _handledCustomizeTasks.remove(id) != nil
     }
 
+    // MARK: - `has_lyrics` 线上来源探针（排障用）
+
+    /// 找出 track 元数据里的 `has_lyrics` 到底搭**哪个 HTTP 响应**过来。
+    ///
+    /// 为什么要去线上找它：
+    ///   · **面 B**（与「关于艺人」并列的「歌词」预览卡片）的门控**够不着** ——
+    ///     `SPTPlayerTrackHook.metadata()` 那个覆写实测**每次都被调用**、也**确实返回了**
+    ///     `has_lyrics = "true"`，可面 B 依然只有 SECRET 出现。说明门控读的是 Swift 内部
+    ///     字段、走静态派发，ObjC 侧 getter 的改写到不了它那里（与取证报告证据 6 一致）。
+    ///   · 而 `has_lyrics` 出现在一个 `[String: String]` 字典里，同字典里还有
+    ///     `image_url` / `title` / `duration` / `popularity` —— 这些都是**服务端下发的**。
+    ///     取证时在 IPA 的 `__cstring` 里搜不到 `has_lyrics`，也符合"键名来自服务端 JSON"。
+    ///
+    /// 所以：**如果它在线上，就能在响应里改** —— 那样 Swift 解析出来的字段一开始就是
+    /// `true`，门控自然通过。这跟 hook getter 完全是两回事。
+    ///
+    /// 本函数**只读、只打日志、不修改任何字节**；同一 path 只报一次。
+    private static var _probeReportedPaths = Set<String>()
+    /// 每个 task 上一块数据的尾巴：`has_lyrics` 可能正好被 chunk 边界切断，
+    /// 不带上这个尾巴就会漏报，进而把"在线上"误判成"不在线上"。
+    private static var _probeCarry: [Int: Data] = [:]
+
+    static func probeHasLyricsKey(url: URL, taskID: Int, data: Data) {
+        guard !data.isEmpty, let needle = "has_lyrics".data(using: .ascii) else { return }
+
+        lock.lock()
+        let carry = _probeCarry[taskID] ?? Data()
+        var window = Data()
+        window.reserveCapacity(carry.count + data.count)
+        window.append(carry)
+        window.append(data)
+        let hit = window.range(of: needle) != nil
+        // 只留 needle.count - 1 字节，够拼上下一块的开头即可。
+        _probeCarry[taskID] = Data(data.suffix(needle.count - 1))
+        if _probeCarry.count > 128 { _probeCarry.removeAll() }   // 兜底：别让它无限长
+        let isNew = hit && _probeReportedPaths.insert(url.path).inserted
+        lock.unlock()
+
+        guard isNew else { return }
+        writeDebugLog(
+            "[HasLyricsProbe] hit — host=\(url.host ?? "?") path=\(url.path)"
+                + " chunk=\(data.count)B"
+        )
+    }
+
     static func shouldBlock(_ url: URL) -> Bool {
         let elapsed = Date().timeIntervalSince(tweakInitTime)
         let path = url.path.lowercased()

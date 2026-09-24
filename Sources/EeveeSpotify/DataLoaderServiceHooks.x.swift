@@ -220,6 +220,8 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         // Suppress original data for endpoints we'll replace in
         // didCompleteWithError — otherwise the consumer sees both.
         if SpotifyResponsePatcher.shouldBlock(url) { return }
+        // 排障：扫一下这块数据里有没有 `has_lyrics`，定位它的线上来源（只读、不改字节）。
+        SpotifyResponsePatcher.probeHasLyricsKey(url: url, taskID: task.taskIdentifier, data: data)
         if CasitaResponseProbe.shouldProbe(url) {
             CasitaResponseProbe.append(data, for: task)
         }
