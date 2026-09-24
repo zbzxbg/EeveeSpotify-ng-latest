@@ -51,9 +51,28 @@ jobs:
       - name: Download IPA
         run: |
           wget "${{ inputs.ipa_url }}" --no-verbose -O spotify.ipa
+
+          # ⚠️ MIME 必须是**两种都放行**：`file` 对 .ipa 的判断取决于它的版本和
+          # 内部魔数表，同一份文件可能报 `application/zip` 或 `application/x-ios-app`。
+          # 上游原版这里只允许 `application/zip`，于是 decrypt.* 这类直链（`file`
+          # 报 x-ios-app）会在**下载成功之后**被判成"不是有效 IPA"直接失败 ——
+          # 实测踩过：wget 拿满 163333452 字节，紧接着 `Not a valid IPA:
+          # application/x-ios-app`。本仓库其它工作流（buildpatched / buildnopatch /
+          # build-and-release-yourself）用的都是"两个都放行"，这里对齐。
           file_type=$(file --mime-type -b spotify.ipa)
-          [ "$file_type" = "application/zip" ] || {
-            echo "::error::Not a valid IPA: $file_type"; exit 1; }
+          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
+            echo "::error::Not a valid IPA: $file_type"; exit 1
+          fi
+
+          # MIME 只说明"像个包"，再验一次里面真的是 Spotify：
+          # 挡掉"下到一半""URL 过期返回 HTML"这类 MIME 看不出来的情况。
+          # 只读 Info.plist，不解整个包（163MB，后面 dump 步骤才解）。
+          if ! unzip -l spotify.ipa 'Payload/Spotify.app/Info.plist' > /dev/null 2>&1; then
+            echo "::error::spotify.ipa does not contain Payload/Spotify.app/Info.plist — truncated download or not a Spotify bundle"
+            unzip -l spotify.ipa 2>&1 | head -20
+            exit 1
+          fi
+          echo "IPA OK: $file_type, $(stat -c%s spotify.ipa) bytes"
 
       - name: Extract Spotify version
         id: ver
