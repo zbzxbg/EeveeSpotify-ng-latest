@@ -346,6 +346,9 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
     private var dtoVersion = -1
     private var activeLineIndex = -1
     private var activeWordIndex = -1
+    /// 最近一次打过「逐字判定」账的歌词版本号。
+    /// 判定只随数据变、不随时间变，所以按版本号去重，一首歌只打一行。
+    private var judgedLyricsVersion = -1
 
     /// 行色随背景明暗切换，见 `resolveTextColors`。
     private var lineColor = UIColor.black
@@ -811,6 +814,55 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         )
     }
 
+    /// 「这一首为什么是逐字档 / 逐行档」—— 把判定的**账**打出来。
+    ///
+    /// ⚠️ 起因：`hasUsableWordLevelData` 是个 50% 阈值判据，但结果只以
+    /// `level=word|line` 一个字母出现在 attached 那行里。**为什么**降级、
+    /// 差多少条线，日志里完全没有 —— 排查"这首歌怎么只有逐行"时无从下手。
+    ///
+    /// 每次换歌/换数据打一行（由 `setCurrentTime` 里版本变化处调用），
+    /// 不是每帧：判定只随数据变。
+    private func logWordLevelJudgeOnce() {
+        guard judgedLyricsVersion != currentLyricsVersion else { return }
+        judgedLyricsVersion = currentLyricsVersion
+
+        guard let dto = currentLyricsDto else {
+            writeDebugLog("[WordByWord] word-level judge: no dto (version \(currentLyricsVersion))")
+            return
+        }
+        let lines = dto.lines
+        guard !lines.isEmpty else {
+            writeDebugLog("[WordByWord] word-level judge: 0 lyric line (version \(currentLyricsVersion))")
+            return
+        }
+        let wordLines = lines.filter { ($0.words?.count ?? 0) >= 2 }.count
+        let timedLines = lines.filter { $0.offsetMs != nil }.count
+        let wordOK = hasUsableWordLevelData(dto)
+        let lineOK = hasUsableLineLevelData(dto)
+        // 阈值：wordLines * 10 >= lines.count * 5（即 >= 50%）；写成整数避免浮点。
+        let needWord = (lines.count * 5 + 9) / 10
+
+        writeDebugLog(
+            "[WordByWord] word-level judge: \(wordLines)/\(lines.count) line(s) carry word timing"
+                + " (need \(needWord) = 50%) -> word-level=\(wordOK ? "Y" : "N")"
+                + "; line timing \(timedLines)/\(lines.count) -> line-level=\(lineOK ? "Y" : "N")"
+                + " | timeSynced=\(dto.timeSynced)"
+                + " romanization=\(romanizationLabel(dto.romanization))"
+                + " | render mode=\(wordOK ? "word" : (lineOK ? "line" : "handback-to-native"))"
+        )
+    }
+
+    /// `LyricsRomanizationStatus` 没实现 `CustomStringConvertible`，直接 `\(enum)`
+    /// 也能编，但打出来是 `romanized` 这种反射形式、跨 Swift 版本不稳定。
+    /// 这里显式映射，日志格式稳定可 grep。
+    private func romanizationLabel(_ status: LyricsRomanizationStatus) -> String {
+        switch status {
+        case .romanized: return "romanized"
+        case .canBeRomanized: return "canBeRomanized"
+        case .original: return "original"
+        }
+    }
+
     /// 每帧由时钟调用：惰性取 dto、词级高亮、自动滚动。
     func setCurrentTime(_ ms: Double) {
         updateShellPlayback()
@@ -823,6 +875,9 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
             dto = currentLyricsDto
             dtoVersion = currentLyricsVersion
             rebuild()
+            // 换歌/换数据后打一次"逐字判定"的账 —— 见 `logWordLevelJudgeOnce`。
+            // 放在这里而不是每帧：判定结果只随数据变，不随时间变。
+            logWordLevelJudgeOnce()
         }
 
         // 背景（模糊封面 + 暗化）与文字色必须先于下面的 guard 配置好：
@@ -1500,9 +1555,30 @@ final class WordByWordHost {
         showsProviderFooter: Bool = false,
         showsTranslation: Bool = true
     ) -> Bool {
-        guard renderEnabled else { return false }
+        // 这次 attach 为什么没挂上。
+        //
+        // ⚠️ 用 `defer` **兜底**，而不是在每个 `return false` 前面各写一行日志：
+        // 这个函数有六七处放弃出口（含以后新加的），靠"记得每处都补一行"必然会漏
+        // —— 之前那几处静默返回就是这么来的。这里一次性保证"任何 return false
+        // 都带原因"，新加出口最差只会显示"（未记录原因）"，不会又变成静默。
+        // 成功返回时 `didAttach` 被置 true，不打印。
+        var exitReason = "(reason not recorded)"
+        var didAttach = false
+        defer {
+            if !didAttach {
+                Self.logAttachRejection(exitReason, controller: controller)
+            }
+        }
+
+        guard renderEnabled else {
+            exitReason = "word-by-word lyrics disabled (renderEnabled=false)"
+            return false
+        }
         let view = contentView ?? controller.view
-        guard let view else { return false }
+        guard let view else {
+            exitReason = "controller.view is nil"
+            return false
+        }
 
         // ── 先把「内嵌预览的宿主」记下来，**早于任何数据判据** ────────────────────
         //
@@ -1534,7 +1610,18 @@ final class WordByWordHost {
         // VC（每首歌/每次卡片重建都会 viewDidAppear，所以"再挂一次"是自然发生的），
         // 而那个类在 9.1.x 上已不存在，我们改用 NPV 宿主触发 —— NPV 只在进入页面时
         // 出现一次，切歌不会再来，于是必须靠这里显式判断版本。
-        if isAttached, hostView === view, renderedLyricsVersion == currentLyricsVersion { return true }
+        if isAttached, hostView === view, renderedLyricsVersion == currentLyricsVersion {
+            // 这条是**成功**的提前返回（层已经挂对地方、渲染的就是当前这首），
+            // 不是放弃。但它在日志里长得和"什么都没发生"一样，所以也记一笔 ——
+            // 排查"切歌了但层没重建"时，这行能直接证明是它挡的。
+            Self.logRejectionThrottled(
+                "[WordByWord] attach skipped — already mounted on the same host at the same version"
+                    + " (version \(currentLyricsVersion))"
+                    + " | host=\(NSStringFromClass(type(of: view)))"
+            )
+            didAttach = true
+            return true
+        }
         detach()
 
         let sideInset = sideInset ?? 16
@@ -1603,6 +1690,8 @@ final class WordByWordHost {
                     "[WordByWord] ⚠️ preview host rejected — no card and foreign lyrics view"
                         + " (\(className)) — will retry"
                 )
+                exitReason = "preview host rejected: no card container and this is a foreign"
+                    + " Lyrics-named view not in the whitelist (\(className))"
                 return false
             }
             // 预览宿主还必须**真的显示在屏幕上**。
@@ -1615,6 +1704,7 @@ final class WordByWordHost {
                 Self.logRejectionThrottled(
                     "[WordByWord] ⚠️ preview host off-screen (\(className)) — will retry"
                 )
+                exitReason = "preview host off-screen (likely a recycled cell view) (\(className))"
                 return false
             }
             var mountView = showsProviderFooter ? view : (card ?? view)
@@ -1627,6 +1717,8 @@ final class WordByWordHost {
                         "[WordByWord] ⚠️ no safe preview mount point"
                             + " (\(NSStringFromClass(type(of: mountView))) is page-sized) — skipped"
                     )
+                    exitReason = "no safe preview mount point: both the card container and the"
+                        + " content view are page-sized (\(NSStringFromClass(type(of: mountView))))"
                     return false
                 }
                 writeDebugLog(
@@ -1680,6 +1772,7 @@ final class WordByWordHost {
             hostView = view
             isAttached = true
             renderedLyricsVersion = currentLyricsVersion
+            didAttach = true
             return true
         }
 
@@ -1694,7 +1787,11 @@ final class WordByWordHost {
         // ⚠️ 判据是**行级**：有逐行时间轴（哪怕没有逐字）也要挂上 —— 否则
         // "网易云这首歌没有 yrc"就会让我们整层消失、露出 Spotify 官方供应商。
         // 高亮精度退化成"当前行整行点亮"，见 `applyHighlight` 在无词数据时的行为。
-        guard lineLevelUsable else { return false }
+        guard lineLevelUsable else {
+            exitReason = "lyrics data unusable: not even **line-level** timing is available"
+                + " (word-level usable=\(usable)); see the `[WordByWord] word-level judge` line above"
+            return false
+        }
 
         // ⚠️ 旧层同样不许挂到"整页大小"的视图上。
         //
@@ -1707,6 +1804,7 @@ final class WordByWordHost {
                 "[WordByWord] ⚠️ preview host is page-sized"
                     + " (\(NSStringFromClass(type(of: view)))) — skipped"
             )
+            exitReason = "preview host is page-sized (\(NSStringFromClass(type(of: view)))) — mounting it would cover the whole native UI"
             return false
         }
 
@@ -1766,6 +1864,7 @@ final class WordByWordHost {
                 // 降级成"当前行整行点亮"（网易云 `yrc absent` 那一批就是它）。
                 + " level=\(usable ? "word" : "line")"
         )
+        didAttach = true
         return true
     }
 
@@ -2003,6 +2102,26 @@ final class WordByWordHost {
     private static var lastChainDumpTime: Date = .distantPast
 
     /// 单槽诊断节流：同一条消息 `interval` 秒内只记一次。
+    /// 让 `attach` 的**每一条放弃路径**都留下原因。
+    ///
+    /// ⚠️ 起因：`attach` 里有六处 `return false`，其中几处是**静默**的。真机日志里
+    /// 表现成"只有 `refresh for current lyrics (version N)` 然后什么都没有"，
+    /// 和"这个函数压根没被调用过"完全无法区分 —— 排查"为什么没挂上"时全靠猜。
+    /// 现在四个出口统一带上原因，答案直接写在日志里。
+    ///
+    /// 全部走 `logRejectionThrottled`：看门狗每 1.5s 会重试一次 `attach`，
+    /// 不加节流的话"挂不上"的场景会每 1.5s 刷一行。
+    private static func logAttachRejection(_ reason: String, controller: UIViewController) {
+        let view = controller.view
+        let hostClass = view.map { NSStringFromClass(type(of: $0)) } ?? "<no view>"
+        let hostSize = view.map { "\(Int($0.bounds.width))x\(Int($0.bounds.height))" } ?? "-"
+        logRejectionThrottled(
+            "[WordByWord] attach declined — \(reason)"
+                + " | host=\(hostClass) \(hostSize)"
+                + " | provider=\(currentLyricsProvider.isEmpty ? "<none>" : currentLyricsProvider)"
+        )
+    }
+
     ///
     /// 与链 dump 各用一套槽位，互不干扰：两者会被同一段重试循环交替触发，
     /// 共用一个槽位等于谁都没被节流。

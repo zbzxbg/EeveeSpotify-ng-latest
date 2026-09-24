@@ -310,7 +310,7 @@ enum WordByWordPlaybackControl {
     @discardableResult
     static func dismissFullscreen() -> Bool {
         guard !isDismissing else {
-            writeDebugLog("[Shell] ⚠️ dismissFullscreen re-entry blocked — 防止递归卡死")
+            writeDebugLog("[Shell] dismissFullscreen re-entry blocked — preventing recursive hang")
             return false
         }
         isDismissing = true

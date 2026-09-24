@@ -31,25 +31,35 @@ private func lyricsRepository(for source: LyricsSource) -> LyricsRepository {
 }
 
 // 两种回退模式共用：处理 Musixmatch 相关错误弹窗
+//
+// ⚠️ 每条分支的**两个方向都要记日志**：因为这两个弹窗各只有一次机会
+// （`hasShownXxxPopUp` 一旦置位就再也不会弹）。排查"用户说没看到弹窗"时，
+// 只记"弹了"是不够的 —— 必须能区分"这次被抑制了"和"这次压根没走到这里"。
 private func handleLyricsErrorPopUp(_ error: LyricsError?) {
     switch error {
     case .invalidMusixmatchToken:
         if !hasShownUnauthorizedPopUp {
+            writeDebugLog("[Lyrics] popup: Musixmatch unauthorized (first time — showing)")
             PopUpHelper.showPopUp(
                 delayed: false,
                 message: "musixmatch_unauthorized_popup".localized,
                 buttonText: "OK".uiKitLocalized
             )
             hasShownUnauthorizedPopUp = true
+        } else {
+            writeDebugLog("[Lyrics] popup: Musixmatch unauthorized (already shown once — suppressed)")
         }
     case .musixmatchRestricted:
         if !hasShownRestrictedPopUp {
+            writeDebugLog("[Lyrics] popup: Musixmatch restricted (first time — showing)")
             PopUpHelper.showPopUp(
                 delayed: false,
                 message: "musixmatch_restricted_popup".localized,
                 buttonText: "OK".uiKitLocalized
             )
             hasShownRestrictedPopUp = true
+        } else {
+            writeDebugLog("[Lyrics] popup: Musixmatch restricted (already shown once — suppressed)")
         }
     default:
         break

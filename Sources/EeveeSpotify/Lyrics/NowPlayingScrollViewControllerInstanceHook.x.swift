@@ -26,7 +26,7 @@ private func logStatefulPlayerResolution(_ identifier: NSString) {
     if count <= 3 {
         writeDebugLog("[Lyrics] statefulPlayer resolved (feature: \(key)) [#\(count)]")
     } else if count == 4 {
-        writeDebugLog("[Lyrics] statefulPlayer resolved (feature: \(key)) — 同一 feature 后续不再记录")
+        writeDebugLog("[Lyrics] statefulPlayer resolved (feature: \(key)) — further logs suppressed for this feature")
     }
 }
 
