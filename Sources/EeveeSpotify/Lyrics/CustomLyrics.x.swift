@@ -133,7 +133,10 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                 return Lyrics.with {
                     $0.data = dto.toSpotifyLyricsData(
                         source: source.description,
-                        useInstrumentalPlaceholder: source != .genius
+                        useInstrumentalPlaceholder: source != .genius,
+                        // 无时间轴的源（Genius 等）靠它把行铺到曲目时长上，
+                        // 否则 9.1.x 会判为"不可用"→ 歌词模块不出现。
+                        durationMs: searchQuery.durationMs
                     )
                 }
             } else if let error = requestError {
@@ -209,7 +212,11 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             // 无时间轴的数据同样过不了这一关（`timeSynced == false`），一并回退。
             if let result = amllResult, hasUsableWordLevelData(result.dto) {
                 writeDebugLog("[Lyrics] AMLL succeeded — using it (\(result.dto.lines.count) line(s))")
-                return makeLyrics(from: result.dto, source: result.source)
+                return makeLyrics(
+                    from: result.dto,
+                    source: result.source,
+                    durationMs: searchQuery.durationMs
+                )
             }
 
             // 分开报两种失败原因：日志里能立刻分清是"请求失败"还是"拿到了但不够逐词"。
@@ -232,7 +239,11 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                 recordFallbackError: false,
                 allowGeniusFallback: source != .genius
             )
-            return makeLyrics(from: result.dto, source: result.source)
+            return makeLyrics(
+                from: result.dto,
+                source: result.source,
+                durationMs: searchQuery.durationMs
+            )
         }
 
         let result = try requestSingleSource(
@@ -242,7 +253,11 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             recordFallbackError: true
         )
 
-        return makeLyrics(from: result.dto, source: result.source)
+        return makeLyrics(
+            from: result.dto,
+            source: result.source,
+            durationMs: searchQuery.durationMs
+        )
     }
     }
 
@@ -347,21 +362,39 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     /// - Parameter note: 追加在提示行之后的一句说明（例如"这首歌正在切换"）。
     ///   传 nil 时保持与历史上完全一致的三行内容。
     func makeUnavailableLyrics(originalColors: LyricsColors?, note: String?) -> Lyrics {
-        Lyrics.with {
+        // 占位文案也要有行级时间轴。
+        //
+        // 理由与 `toSpotifyLyricsData` 相同：这个版本把"无时间轴"判为不可用，
+        // 而占位恰恰是"取不到词"那条路上唯一交出去的东西 —— 没有时间轴就等于
+        // 连"未找到歌词"都显示不出来，用户看到的是**彻底没有歌词模块**。
+        var placeholderLines = [
+            LyricsLineDto(content: "ngzhwm_lyrics_unavailable".localized),
+            LyricsLineDto(content: ""),
+            LyricsLineDto(content: "ngzhwm_lyrics_unavailable_hint".localized)
+        ]
+        if let note, !note.isEmpty {
+            placeholderLines.append(LyricsLineDto(content: note))
+        }
+
+        if NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled {
+            placeholderLines = SyntheticLyricTiming.applying(
+                to: placeholderLines,
+                durationMs: currentTrackDurationMs
+            )
+        }
+
+        return Lyrics.with {
             $0.data = LyricsData.with {
-                $0.timeSynchronized = false
+                // 合成过时间轴 → 如实声明；否则保持旧的"无时间轴"语义。
+                $0.timeSynchronized = placeholderLines.contains { ($0.offsetMs ?? 0) > 0 }
                 $0.restriction = .unrestricted
                 // 署名是我们自己：界面上那一行来源不会再写成别人的品牌。
                 $0.providedBy = "EeveeSpotify"
-                $0.lines = [
-                    LyricsLine.with { $0.content = "ngzhwm_lyrics_unavailable".localized },
-                    LyricsLine.with { $0.content = "" },
+                $0.lines = placeholderLines.map { line in
                     LyricsLine.with {
-                        $0.content = "ngzhwm_lyrics_unavailable_hint".localized
-                    },
-                ]
-                if let note, !note.isEmpty {
-                    $0.lines.append(LyricsLine.with { $0.content = note })
+                        $0.content = line.content
+                        $0.offsetMs = Int32(line.offsetMs ?? 0)
+                    }
                 }
             }
             // 颜色沿用 Spotify 原来那份：背景色 / 歌名配色保持原样，看不出被替换过。
@@ -428,7 +461,13 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     ///
     /// - Parameter source: **实际**产出这份 dto 的源（Genius 兜底时是 `.genius`，
     ///   不是用户设的那个）。来源标签与注入给 Spotify 的 `providedBy` 都用它。
-    private func makeLyrics(from dto: LyricsDto, source: LyricsSource) -> Lyrics {
+    /// - Parameter durationMs: 曲目时长，用于给无时间轴的源合成行级时间轴（见
+    ///   `SyntheticLyricTiming`）。为 nil 时按每行估时兜底。
+    private func makeLyrics(
+        from dto: LyricsDto,
+        source: LyricsSource,
+        durationMs: Int? = nil
+    ) -> Lyrics {
         lyricsState.isEmpty = dto.lines.isEmpty
         lyricsState.wasRomanized = dto.romanization == .romanized
             || dto.romanization == .canBeRomanized
@@ -439,7 +478,8 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         return Lyrics.with {
             $0.data = dto.toSpotifyLyricsData(
                 source: source.description,
-                useInstrumentalPlaceholder: source != .genius
+                useInstrumentalPlaceholder: source != .genius,
+                durationMs: durationMs
             )
         }
     }
@@ -523,6 +563,10 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     guard let track = track else {
         throw LyricsError.noCurrentTrack
     }
+
+    // 记下这一首的时长：占位文案的合成时间轴要用（那几步拿不到 track 对象）。
+    // 与 `currentLyricsDto` 同一时机写入，语义都是"这一次请求的曲目"。
+    currentTrackDurationMs = track.trackDurationMilliseconds
 
     if !trackIdentifier.isEmpty && !originalPath.contains(trackIdentifier) {
         throw LyricsError.trackMismatch

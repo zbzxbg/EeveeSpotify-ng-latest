@@ -15,7 +15,6 @@ extension UserDefaults {
     private static let iconNamePrettifyKey = "iconNamePrettify"
     private static let cleanShareLinksKey = "cleanShareLinks"
     private static let enableLogRecordingKey = "enableLogRecording"
-    private static let enableTrackProbeKey = "ngzhwm_trackProbe"
 
     static var musixmatchToken: String {
         get {
@@ -111,30 +110,6 @@ extension UserDefaults {
         }
         set {
             container.set(newValue, forKey: enableLogRecordingKey)
-        }
-    }
-
-    /// 「运行时类名探针」开关（`Tweak.logPlayerTrackCandidates` 的唯一入口）。
-    ///
-    /// 默认 **false**，而且**刻意与 `enableLogRecording` 解耦**。
-    ///
-    /// 为什么必须解耦：这个探针曾经挂在「启用日志记录」下面，结果是**一开日志就在
-    /// 启动期崩**（真机复现：开日志 + 杀后台 + 重开 → Spotify 启动后约 291ms
-    /// EXC_BREAKPOINT/SIGTRAP，栈在 `_CF_forwarding_prep_0` → `swift_getObjectType`，
-    /// 寄存器里是 `__NSGenericDeallocHandler` —— 典型"给已释放对象发消息"）。
-    /// 探针本身没有写内存，它是对**全部约 1.7 万个类**逐个调 runtime 函数、
-    /// 把主线程启动时序整体挪了一拍，引爆了 Spotify 自己恢复上次播放状态时的
-    /// 一个陈旧对象。换句话说：**日志是用户常用功能，探针是排障工具，两者绝不能共用开关。**
-    ///
-    /// 打开方式（二选一，不需要改代码）：
-    ///   · 环境变量 `EEVEE_TRACK_PROBE=1`（越狱/调试注入时最方便）；
-    ///   · 默认值（设置界面里没有入口，需要用 `defaults`/越狱文件系统写入该键）。
-    static var enableTrackProbe: Bool {
-        get {
-            container.bool(forKey: enableTrackProbeKey)
-        }
-        set {
-            container.set(newValue, forKey: enableTrackProbeKey)
         }
     }
 }

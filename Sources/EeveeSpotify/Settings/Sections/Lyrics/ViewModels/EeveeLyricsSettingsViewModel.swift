@@ -54,6 +54,20 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
     
+    /// 「给无时间轴的歌词补时间轴」。
+    ///
+    /// ⚠️ 初值必须走 `isSyntheticLineTimingEnabled`（默认 **true**），
+    /// 不能写 `UserDefaults.standard.bool(forKey:)` —— 后者在 key 未写入时是 false，
+    /// 会让开关初始显示为"关"，与真实生效状态相反。
+    @Published var syntheticLineTiming = NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled {
+        didSet {
+            UserDefaults.standard.set(
+                syntheticLineTiming,
+                forKey: NgzhwmSettingsViewModel.syntheticLineTimingKey
+            )
+        }
+    }
+    
     // 注：背景相关（模糊封面 / 系统材质）**没有** Published 属性 ——
     // 它们不是用户可选项，而是跟随「更好的逐词歌词」自动启用。
     // 见 NgzhwmSettingsViewModel.isLyricsBlurredBackdropEnabled。

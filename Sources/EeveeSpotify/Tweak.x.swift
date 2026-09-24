@@ -236,142 +236,25 @@ func eeveeEnvFlag(_ name: String) -> Bool {
     return s == "1" || s == "true" || s == "yes" || s == "y"
 }
 
-/// 类名前缀白名单：**先按名字筛，再碰运行时**。
-///
-/// 这一步不是优化，是**安全措施**。上一版对全部约 1.7 万个类逐个调
-/// `class_getInstanceMethod`，真机上表现为"开日志记录 + 杀后台 + 重开"就在启动后
-/// 约 291ms 崩（栈：`_CF_forwarding_prep_0` → `swift_getObjectType`，寄存器
-/// `__NSGenericDeallocHandler` = 给已释放对象发消息）。
-/// 探针只读，但它对每个类都触发 Swift/ObjC 元数据 realize，把启动时序挪了一拍，
-/// 点着了 Spotify 恢复上次播放状态时的一个陈旧对象。
-/// 加上前缀过滤后，被碰到的类从 ~17000 降到几百，风险回到可接受范围。
-///
-/// 候选命名空间来自 9.1.86 的符号扫描（`C:\dsh\else\dump-unknown.txt` 的 [classes] 桶）：
-/// `SPT*`（老 ObjC 层）、`Player*`、`NowPlaying_*`、`Lyrics_*`、`Stateful*`、`Connect*`。
-private let trackProbeNamePrefixes: [String] = [
-    "SPT",
-    "Player",
-    "NowPlaying",
-    "Lyrics",
-    "Stateful",
-    "Connect"
-]
-
-/// 探针的启用判据：`UserDefaults.enableTrackProbe`（默认 false）
-/// 或环境变量 `EEVEE_TRACK_PROBE=1`。
-///
-/// ⚠️ **绝不能**再用 `UserDefaults.enableLogRecording` 当条件 —— 那就是上面那次
-/// 启动崩溃的成因：日志是日常功能，探针是排障工具。
-func eeveeTrackProbeEnabled() -> Bool {
-    if UserDefaults.enableTrackProbe { return true }
-    return eeveeEnvFlag("EEVEE_TRACK_PROBE")
-}
-
-/// 把探针**推到启动之后**再跑。
-///
-/// 为什么不直接 `async` 一下就好：探针是"想知道类名"时才用的排障工具，
-/// 没有任何理由挤在启动窗口里。真机那次崩溃（开日志 + 杀后台 + 重开，启动后约 291ms
-/// SIGTRAP）的根因就是它和 Spotify 恢复上次播放状态那段代码抢同一拍主线程。
-/// 延迟到启动稳定之后再枚举类表：既拿得到同样的答案，又彻底离开启动路径。
-///
-/// 延迟期间**不持有**任何 Spotify 对象（只有几个 Int/String），
-/// 所以不会像 hook 里那样把宿主 VC 一直留住。
-func schedulePlayerTrackProbeIfEnabled() {
-    guard eeveeTrackProbeEnabled() else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-        logPlayerTrackCandidates()
-    }
-}
-
-/// 枚举运行时里"同时提供 `metadata` 与 `URI` 的类"，用来定位 9.1.x 上真正的
-/// track 类 —— 也就是 `has_lyrics` 覆写应该挂在哪个类上。
-///
-/// 背景：`CustomLyrics+AllTracksLyrics.swift` 里的 `SPTPlayerTrackHook` 仍然按版本号
-/// 猜类名（`EeveeSpotify.hookTarget == .latest ? "SPTPlayerTrackImplementation" : "SPTPlayerTrack"`），
-/// 而 9.1.x 被判成 `.v91`，于是它去挂 `SPTPlayerTrack`；可是 9.1.86 的类表里
-/// **两个名字都不存在**（`Scripts/dump-spotify-symbols.py` 的 [classes] 桶里搜
-/// `PlayerTrack`，只有 `StatefulPlayerTrackPositionImplementation` 等几个无关类）。
-/// 那条 hook 一旦绑不上，`has_lyrics = "true"` 就从来没有被写进去过。
-///
-/// 这个探针只打日志、不改任何行为：日志里出现的那一行就是应该写进 `targetName` 的类名。
-/// **默认不跑**，只由 `eeveeTrackProbeEnabled()` 放行（见它的说明）。
-func logPlayerTrackCandidates() {
-    // `metadata()` / `URI()` 是 track 类在 ObjC 侧已有的两个方法 —— 本仓库的
-    // `@objc protocol SPTPlayerTrack` 就是这么声明的。这里不假设任何类名，
-    // 直接枚举运行时里"同时实现这两个方法"的类。
-    //
-    // ⚠️ 注意这个工具链里 `Selector(_:)` 返回的是**非 Optional**（Foundation 的
-    // `Selector` 与 `ObjectiveC.Selector` 之间的差异），所以这里不能用
-    // `guard let` 绑定，否则编译器直接报"条件绑定的绑定值必须是 Optional"。
-    let metadataSelector = Selector(("metadata"))
-    let uriSelector = Selector(("URI"))
-
-    // 用 `objc_copyClassList`（不是 `objc_getClassList`）：
-    //   · 它一次调用就返回"已注册类"缓冲区的**所有权**，签名干净
-    //     （`objc_getClassList` 的缓冲区参数是 `AutoreleasingUnsafeMutablePointer<AnyClass>`，
-    //     在"传 nil 拿计数"和"传缓冲区"两种调用上容易踩类型推断的坑）；
-    //   · 它返回的是 `AutoreleasingUnsafeMutablePointer<AnyClass>` —— 编译器报错原文
-    //     确认了这个类型，而它**不能**直接交给 `free()`。要先
-    //     `UnsafeMutableRawPointer(...)` 转成裸指针再 free，这一步是必需的。
-    var classCount: UInt32 = 0
-    guard let classList = objc_copyClassList(&classCount), classCount > 0 else {
-        writeDebugLog("[TrackProbe] objc_copyClassList returned nothing")
-        return
-    }
-    defer { free(UnsafeMutableRawPointer(classList)) }
-
-    var candidates: [String] = []
-    var scanned = 0
-    var classNames: [String] = []
-
-    // ⚠️ 上一次这个探针报 "SPTPlayerTrack exists: false"，**是探针自己错了**：
-    // `NSClassFromString("SPTPlayerTrack")` 找的是 **ObjC 类名**，而 Swift 类在运行时
-    // 是按 `_TtC…` 注册的，按 ObjC 名查必然查不到 —— 假阴性。
-    // 离线分析（Tools/eevee-hookfinder）已经证明 9.1.86 的 `__objc_classname` 表里
-    // **确实有 `SPTPlayerTrack` 和 `SPTPlayerTrack_NowPlaying`**。
-    //
-    // 正解是：遍历运行时类表，用 `class_getName` 拿 **ObjC 类名** 做**精确比对**。
-    // 注意不能用 `String(describing: cls)` —— 那给的是 `Module.Class` 形式，
-    // 与 ObjC 名不同（纯 Swift 类根本没有 ObjC 名）。
-    for index in 0..<Int(classCount) {
-        let cls: AnyClass = classList[index]
-        classNames.append(String(cString: class_getName(cls)))
-    }
-
-    let exactNames = ["SPTPlayerTrack", "SPTPlayerTrack_NowPlaying"]
-    for wanted in exactNames {
-        writeDebugLog("[TrackProbe] exact \"\(wanted)\" in runtime class list: \(classNames.contains(wanted))")
-    }
-
-    for index in 0..<classNames.count {
-        let name = classNames[index]
-
-        // 名字里带 PlayerTrack 的全部报出来（这就是 targetName 的候选集合）
-        if name.contains("PlayerTrack") {
-            writeDebugLog("[TrackProbe] PlayerTrack-ish: \(name)")
-        }
-
-        // ① 先按名字筛，再碰方法表（安全 + 省事）。
-        guard trackProbeNamePrefixes.contains(where: { name.hasPrefix($0) }) else {
-            continue
-        }
-
-        scanned += 1
-
-        // ② Swift 里嵌在类内部/闭包里的类型名字很长，加一个长度上限，
-        //    它们都不是我们要找的 track 类。
-        guard name.count <= 64 else { continue }
-
-        let cls: AnyClass = classList[index]
-        guard class_getInstanceMethod(cls, metadataSelector) != nil,
-              class_getInstanceMethod(cls, uriSelector) != nil else {
-            continue
-        }
-        candidates.append(name)
-    }
-
-    writeDebugLog("[TrackProbe] total \(classNames.count) classes; scanned \(scanned) whitelisted; \(candidates.count) expose metadata()+URI(): \(candidates.sorted().joined(separator: ", "))")
-}
+// ── 这里曾经有一个"运行时类名探针"（`logPlayerTrackCandidates`）───────────────
+//
+// 它的目的：离线找出 9.1.x 上到底是哪个类提供 `metadata()`（`has_lyrics` 就在那个
+// 字典里），好把 `SPTPlayerTrackHook.targetName` 改成真名。
+//
+// **已经删掉了**，原因是它连续两次造成启动崩溃，而且一次都没能给出可用结果：
+//   · 第一次：挂在「启用日志记录」下面 → 开日志 + 杀后台 + 重开 = 启动后约 291ms
+//     崩（EXC_BREAKPOINT/SIGTRAP，栈在 `_CF_forwarding_prep_0` → `swift_getObjectType`，
+//     寄存器 `__NSGenericDeallocHandler` = 给已释放对象发消息）；
+//   · 第二次：改成独立开关 + 启动后 3 秒 + 只扫白名单前缀，仍然崩（同一崩溃地址
+//     0x19dbe54b4、同一份指令流），而且**崩溃时日志文件里什么都没有** ——
+//     说明崩在写日志之前，或者日志所在的 tmp 目录随重装被清掉了。
+// 结论：在这台设备上"运行时诊断"这条路不可观测也不可控，不值得再试第三次。
+//
+// 真正需要"哪个类持有 has_lyrics"这个答案时，走离线路线：
+//   Tools/eevee-hookfinder/extract_player_track_class.py
+// 它直接读解密 IPA 的 `__objc_classname` / `__objc_methname`，不碰运行时，
+// 已经据此确认 9.1.86 里 `SPTPlayerTrack` 是存在的（当初 dump-unknown.txt
+// 只抓 `_TtC` 开头的 Swift 名，才误判成"不存在"）。
 
 struct EeveeSpotify: Tweak {
     static let version = "6.6.8"
@@ -563,14 +446,6 @@ struct EeveeSpotify: Tweak {
                 } else {
                     writeDebugLog("[INIT] Skipped ng lyrics groups (no lyrics host on this build)")
                 }
-
-                // 定位"has_lyrics 应该写进哪个类"：**默认不跑**，而且**推到启动之后**跑。
-                //
-                // ⚠️ 这里以前写的是 `if UserDefaults.enableLogRecording { logPlayerTrackCandidates() }`，
-                // 真机上导致"开日志记录 + 杀后台 + 重开"必崩（启动后约 291ms，
-                // SIGTRAP 在消息转发里）。日志是日常功能，探针是排障工具，两者不能共用开关；
-                // 而且探针本来就不该挤在启动窗口里 —— 见 `schedulePlayerTrackProbeIfEnabled`。
-                schedulePlayerTrackProbeIfEnabled()
             }
 
             // Settings integration (guarded)

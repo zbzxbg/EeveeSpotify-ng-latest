@@ -10,6 +10,7 @@ class NgzhwmSettingsViewModel: ObservableObject {
     static let betterWordByWordLyricsKey = "ngzhwm_betterWordByWordLyrics"
     static let amllPreferredKey = "ngzhwm_amllPreferred"
     static let hideOfficialLyricsKey = "ngzhwm_hideOfficialLyrics"
+    static let syntheticLineTimingKey = "ngzhwm_syntheticLineTiming"
     static let blurredLyricsBackdropKey = "ngzhwm_blurredLyricsBackdrop"
     static let lyricsBackdropMaterialKey = "ngzhwm_lyricsBackdropMaterial"
 
@@ -85,5 +86,17 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// 与 `isLyricsBlurredBackdropEnabled` 同理，跟随「更好的逐词歌词」。
     static var isLyricsBackdropMaterialEnabled: Bool {
         isBetterWordByWordLyricsEnabled
+    }
+
+    /// 「给无时间轴的歌词补时间轴」：Genius 这类源给的是纯文本（`timeSynced: false`），
+    /// 在这个版本上会被渲染层判为"不可用"，表现就是**歌词模块不出现**。
+    ///
+    /// 开启后，注入给 Spotify 的那份 payload 会被铺上一层按曲目时长估算的行级时间轴，
+    /// 从而走"同步歌词"渲染路径。**只影响注入给 Spotify 的 protobuf**，
+    /// `currentLyricsDto` 与逐词 overlay 的判据都不变。
+    ///
+    /// 默认**开启**（可用性优先）。想复现"无时间轴"的旧行为做 A/B 对比时关掉它即可。
+    static var isSyntheticLineTimingEnabled: Bool {
+        bool(forKey: syntheticLineTimingKey, defaultValue: true)
     }
 }

@@ -46,6 +46,7 @@ struct EeveeLyricsSettingsView: View {
                 
                 hideOnErrorSection()
                 hideOfficialLyricsSection()
+                syntheticLineTimingSection()
                 romanizationSection()
                 
                 // 多级回退链路包含 Musixmatch，其语言项同样可配置。
@@ -175,6 +176,22 @@ struct EeveeLyricsSettingsView: View {
             )
         } footer: {
             Text("ngzhwm_hide_official_lyrics_description".localized)
+        }
+    }
+
+    /// 「给无时间轴的歌词补时间轴」。
+    ///
+    /// 为什么做成可见开关而不是写死：这是"9.1.x 上无时间轴 = 不可用"这一结论的
+    /// **验证手段** —— 关掉它就能复现旧行为（无时间轴 → 模块不出现），
+    /// 一眼看出这个修复到底有没有用。验证完可以再做进默认值里藏起来。
+    @ViewBuilder private func syntheticLineTimingSection() -> some View {
+        Section {
+            Toggle(
+                "ngzhwm_synthetic_line_timing".localized,
+                isOn: $viewModel.syntheticLineTiming
+            )
+        } footer: {
+            Text("ngzhwm_synthetic_line_timing_description".localized)
         }
     }
 

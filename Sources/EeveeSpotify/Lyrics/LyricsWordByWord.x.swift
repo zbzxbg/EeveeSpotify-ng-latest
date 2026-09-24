@@ -23,6 +23,19 @@ var currentLyricsBackgroundColorARGB: UInt32 = 0
 /// 歌词提供者文本（如 "PetitLyrics (EeveeSpotify)"），用于 overlay 底部展示。
 var currentLyricsProvider: String = ""
 
+/// 当前曲目时长（毫秒），由 `getLyricsDataForCurrentTrack` 在处理这次歌词请求时写入。
+///
+/// 用途：给**无时间轴**的 payload（占位文案、Genius 纯文本）合成行级时间轴 ——
+/// 那三步的位置（`unavailableLyricsPayload` / `makeUnavailableLyrics` /
+/// `unavailableLyricsBytes`）都拿不到 track 对象，但都需要时长才能把行铺开。
+///
+/// 为什么是全局变量而不是参数：这三个函数分别服务于"响应替换"与"字节兜底"两条
+/// 独立的失败路径，串参数会一路污染签名；而它本质上是"这一次请求的曲目"的上下文，
+/// 与 `currentLyricsDto` 同源同时刻写入，语义一致。
+///
+/// nil 表示时长未知（合成逻辑会按每行估时兜底）。
+var currentTrackDurationMs: Int?
+
 // MARK: - 位置解析
 
 @objc protocol WordByWordPositionDoubleGetter { func playbackPosition() -> Double }

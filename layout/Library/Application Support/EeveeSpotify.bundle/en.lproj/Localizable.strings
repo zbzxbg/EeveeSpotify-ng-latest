@@ -148,14 +148,14 @@ ngzhwm_remove_interlude_symbol = "Delete Interlude Symbol \"♪\"";
 ngzhwm_remove_interlude_symbol_description = "When this option is enabled, the interlude symbol \"♪\" is removed from lyrics, and lines containing \"♪\" are displayed as blank.";
 ngzhwm_hide_official_lyrics = "Hide Spotify's Official Lyrics";
 ngzhwm_hide_official_lyrics_description = "When enabled, if your custom lyrics source has no lyrics for the track, Spotify's own lyrics are no longer shown (their provider and romanization are outside this tweak's control) — a short notice is shown instead. Disable this to fall back to Spotify's own lyrics.";
+ngzhwm_synthetic_line_timing = "Add Timing to Untimed Lyrics";
+ngzhwm_synthetic_line_timing_description = "Sources like Genius return plain text with no line timings, and recent Spotify versions treat untimed lyrics as unusable — the lyrics module can then fail to appear at all. When enabled, line timings are estimated from the track duration so those lyrics still render. Turn this off to reproduce the old behaviour for comparison.";
 ngzhwm_lyrics_unavailable = "No lyrics found";
 ngzhwm_lyrics_unavailable_hint = "Try another lyrics source in Settings, or try again later.";
 track_mismatch = "The track changed while lyrics were loading. Play it again to fetch lyrics.";
 // Debug
 
 debug_title = "Debug";
-ngzhwm_track_probe = "Track Class Probe (restart required)";
-ngzhwm_track_probe_description = "Diagnostic only. After Spotify restarts, it enumerates the player-track classes and writes the result to the debug log — used to find which class owns the \"has_lyrics\" metadata. Leave this off unless you are asked to turn it on.";
 enable_log_recording = "Enable Log Recording";
 enable_log_recording_description = "There's no need to enable log recording for normal use.";
 export_debug_log = "Export Debug Log";

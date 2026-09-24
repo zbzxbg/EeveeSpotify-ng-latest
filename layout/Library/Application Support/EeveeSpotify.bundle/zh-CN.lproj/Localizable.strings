@@ -142,14 +142,14 @@ ngzhwm_remove_interlude_symbol = "删除间奏符号「♪」";
 ngzhwm_remove_interlude_symbol_description = "选项开启时后会删除歌词内的间奏符号「♪」，有♪的这一行会显示空白。";
 ngzhwm_hide_official_lyrics = "隐藏Spotify官方歌词";
 ngzhwm_hide_official_lyrics_description = "选项开启后，如果自定义歌词源没有取到歌词，界面不会再显示Spotify自带的歌词（那些歌词的来源、是否罗马化都不受本插件控制），而是显示一条提示。关闭后恢复显示Spotify自带的歌词。";
+ngzhwm_synthetic_line_timing = "为无时间轴歌词补时间轴";
+ngzhwm_synthetic_line_timing_description = "Genius 这类来源给的是没有时间轴的纯文本，而较新的 Spotify 版本会把「无时间轴」判为不可用，表现就是歌词模块完全不出现。开启后按曲目时长估算每行的位置，让这些歌词也能正常显示。关闭可复现旧行为，便于对比。";
 ngzhwm_lyrics_unavailable = "未找到歌词";
 ngzhwm_lyrics_unavailable_hint = "可以在设置里换一个歌词来源，或稍后重试。";
 track_mismatch = "取词期间切了歌，重新播放这一首即可获取歌词。";
 // Debug
 
 debug_title = "调试";
-ngzhwm_track_probe = "类名探针（需重启生效）";
-ngzhwm_track_probe_description = "仅用于排障。重启 Spotify 后，它会枚举播放器曲目相关的类并把结果写进调试日志 —— 用来确认 has_lyrics 这个元数据到底属于哪个类。除非有人让你开，否则别开。";
 enable_log_recording = "开启日志记录";
 enable_log_recording_description = "平常使用无须开启日志记录功能。";
 export_debug_log = "导出调试日志";

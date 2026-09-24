@@ -25,39 +25,77 @@ struct LyricsDto {
     
     func toSpotifyLyricsData(
         source: String,
-        useInstrumentalPlaceholder: Bool = true
+        useInstrumentalPlaceholder: Bool = true,
+        durationMs: Int? = nil
     ) -> LyricsData {
+        // ── 行级时间轴兜底 ────────────────────────────────────────────────────
+        //
+        // 真机取证结论：Spotify 9.1.x 把 NPV 歌词模块重写成响应驱动的组件后，
+        // **无时间轴的 payload 等于"不可用"** —— 日志里正常场次都是
+        // `line timing 54/54 -> line-level=Y | timeSynced=true`，而取不到词的场次是
+        // `serving our placeholder` → `attach declined — not even line-level timing
+        // is available`。Genius 这类源给的本来就是 `timeSynced: false` 纯文本，
+        // 与占位文案同病（这就是"开了 Genius 回退反而更严重"的机制）。
+        //
+        // 所以在**交给 Spotify 的这唯一出口**统一补：拿不到时间轴就按曲目时长铺一层。
+        // ⚠️ 只改这份 protobuf：`currentLyricsDto` 与逐词 overlay 的判据
+        // （`hasUsableLineLevelData`）都读原始 dto，不受影响。
+        // 触发条件用 `hasAnyLineTiming`（**一行都没有**才补），而不是 50% 阈值：
+        // 源只要给了真实时间轴，哪怕只有零星几行（坏 LRC），也不该用估算值覆盖它 ——
+        // 那会把"部分准确"变成"全部不准确"。50% 阈值那个口径留给渲染层判据用。
+        let synthesizesTiming = NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled
+            && !SyntheticLyricTiming.hasAnyLineTiming(lines)
+
+        // 有效行 = 原始行，或（空歌词 + 纯音乐占位时）那三行占位文案。
+        // 占位文案同样需要时间轴，否则"纯音乐"这种最该有模块的情况反而没有。
+        let effectiveLines: [LyricsLineDto]
+        if lines.isEmpty {
+            effectiveLines = useInstrumentalPlaceholder
+                ? [
+                    LyricsLineDto(content: "song_is_instrumental".localized),
+                    LyricsLineDto(content: "let_the_music_play".localized),
+                    LyricsLineDto(content: "")
+                ]
+                : []
+        } else {
+            effectiveLines = lines
+        }
+
+        let timedLines = synthesizesTiming
+            ? SyntheticLyricTiming.applying(to: effectiveLines, durationMs: durationMs)
+            : effectiveLines
+
+        // A/B 与排障用：这条日志能一眼看出"这次到底有没有补时间轴"。
+        // 没有它就只能靠"歌词模块出没出现"反推，无法区分"没补"和"补了但没用"。
+        if synthesizesTiming, !timedLines.isEmpty {
+            let lastOffset = timedLines.map { $0.offsetMs ?? 0 }.max() ?? 0
+            writeDebugLog(
+                "[Lyrics] synthetic line timing applied — \(timedLines.count) line(s),"
+                    + " duration=\(durationMs.map(String.init) ?? "unknown")ms,"
+                    + " lastOffset=\(lastOffset)ms, source=\(source)"
+            )
+        }
+
         var lyricsData = LyricsData.with {
-            $0.timeSynchronized = timeSynced
+            // 有行、且每行都带 offset → 就是"同步歌词"，如实告诉 Spotify。
+            $0.timeSynchronized = timedLines.contains { ($0.offsetMs ?? 0) > 0 }
             $0.restriction = .unrestricted
             $0.providedBy = "\(source) (EeveeSpotify)"
         }
         
         let canRomanize = romanization == .canBeRomanized
         
-        if lines.isEmpty {
-            if useInstrumentalPlaceholder {
-                lyricsData.lines = [
-                    LyricsLine.with {
-                        $0.content = "song_is_instrumental".localized
-                    },
-                    LyricsLine.with {
-                        $0.content = "let_the_music_play".localized
-                    },
-                    LyricsLine.with {
-                        $0.content = ""
-                    }
-                ]
-            }
+        if timedLines.isEmpty {
+            // 没有行可画（且未启用纯音乐占位）—— 保持空 payload。
         }
         else {
-            let sortedLines = lines.sorted { 
+            let sortedLines = timedLines.sorted { 
                 ($0.offsetMs ?? 0) < ($1.offsetMs ?? 0)
             }
             // 整首歌语言占比检测（所有源统一）：占比最高的 CJK 语言 > 阈值时，
             // 作为整首歌的统一路由语言，避免逐行识别把孤立汉字行误判。
             let songLanguage: NLLanguage? = canRomanize
-                ? lines.map(\.content).dominantCJKLanguageAbove(threshold: romajiLanguageThreshold)
+                ? timedLines.map(\.content).dominantCJKLanguageAbove(threshold: romajiLanguageThreshold)
                 : nil
             lyricsData.lines = sortedLines.map { line in
                 LyricsLine.with {
