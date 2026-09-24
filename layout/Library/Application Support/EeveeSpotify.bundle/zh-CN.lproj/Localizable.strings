@@ -148,6 +148,8 @@ track_mismatch = "取词期间切了歌，重新播放这一首即可获取歌�
 // Debug
 
 debug_title = "调试";
+ngzhwm_track_probe = "类名探针（需重启生效）";
+ngzhwm_track_probe_description = "仅用于排障。重启 Spotify 后，它会枚举播放器曲目相关的类并把结果写进调试日志 —— 用来确认 has_lyrics 这个元数据到底属于哪个类。除非有人让你开，否则别开。";
 enable_log_recording = "开启日志记录";
 enable_log_recording_description = "平常使用无须开启日志记录功能。";
 export_debug_log = "导出调试日志";

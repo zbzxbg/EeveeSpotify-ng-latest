@@ -154,6 +154,8 @@ track_mismatch = "The track changed while lyrics were loading. Play it again to 
 // Debug
 
 debug_title = "Debug";
+ngzhwm_track_probe = "Track Class Probe (restart required)";
+ngzhwm_track_probe_description = "Diagnostic only. After Spotify restarts, it enumerates the player-track classes and writes the result to the debug log — used to find which class owns the \"has_lyrics\" metadata. Leave this off unless you are asked to turn it on.";
 enable_log_recording = "Enable Log Recording";
 enable_log_recording_description = "There's no need to enable log recording for normal use.";
 export_debug_log = "Export Debug Log";

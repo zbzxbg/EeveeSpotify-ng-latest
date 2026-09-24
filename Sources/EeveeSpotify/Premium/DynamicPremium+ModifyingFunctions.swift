@@ -404,15 +404,23 @@ private let propertyReplacements = [
     // 客户端读的是 track 元数据里的 `has_lyrics` 键（真机日志的
     // `[Artwork] metadata keys:` 一行里逐字可见）。EeveeSpotify 从 910 起就在
     // `SPTPlayerTrackHook.metadata()` 里把它覆写成 "true"，但那条 hook 现在挂在
-    // 9.1.x 上不存在的类上（见 CustomLyrics+AllTracksLyrics.x.swift），
-    // 于是真正能生效的就只剩这条服务端配置旁路 —— 所以两个候选 scope 各一份。
-    // RemoteConfig 按 scope 取值：种错 scope 没有任何副作用，种对了就少一层门控。
-    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", scope: "ios-feature-lyrics", modification: .forceBool(true)),
-    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", scope: "ios-lyrics-npvcommunicator-impl", modification: .forceBool(true)),
-    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", modification: .forceBool(true)),
+    // 9.1.x 上不存在的类上（见 CustomLyrics+AllTracksLyrics.x.swift）。
+    //
+    // ⚠️ 刻意只用 `setBool`（**只改已存在的值，绝不新增**），理由：
+    //   · `enable_has_lyrics_check_bypass` 这个**名字**是从 9.1.86 的 flag 表里
+    //     逐字读出来的，可靠；
+    //   · 但它归属的 **scope 名我们并不知道** —— 我先前那条
+    //     `scope: "ios-lyrics-npvcommunicator-impl"` 是**猜的**。`.forceBool` 遇到
+    //     "名字+scope 都不存在"会**凭空插一个 AssignedValue**，等于把臆造的数据
+    //     塞进 Spotify 的配置解析路径，风险与收益不成比例。
+    //   · `setBool` 只做"把服务端已经给的值钉成 true"，服务端真把它关了也能改回来，
+    //     而不存在时什么都不做 —— 收益几乎一样，副作用归零。
+    // 等真机日志确认了真实 scope 或真实开关名，再考虑升回 forceBool。
+    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", scope: "ios-feature-lyrics", modification: .setBool(true)),
+    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", modification: .setBool(true)),
     // 总开关：会话中途被服务端改回 false 会让歌词整体消失，这里钉死为 true。
-    EeveePropertyReplacement(name: "enable_lyrics", scope: "ios-feature-lyrics", modification: .forceBool(true)),
-    EeveePropertyReplacement(name: "enable_lyrics", modification: .forceBool(true))
+    EeveePropertyReplacement(name: "enable_lyrics", scope: "ios-feature-lyrics", modification: .setBool(true)),
+    EeveePropertyReplacement(name: "enable_lyrics", modification: .setBool(true))
 ]
 
 private func modifyAssignedValues(_ values: inout [AssignedValue]) {

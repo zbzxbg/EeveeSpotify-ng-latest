@@ -208,6 +208,25 @@ struct EeveeSettingsView: View {
                     }
                     .foregroundColor(.red)
                 }
+
+                // 「运行时类名探针」：只在排查"歌词模块不出现 / has_lyrics 写给了谁"时打开。
+                //
+                // 放在这里而不是挂在「启用日志记录」下面，是踩过坑之后的结论：
+                // 那个探针曾经一开日志就在启动期崩（详见 `UserDefaults.enableTrackProbe`
+                // 的注释）。现在它默认关闭，而且开启后也是**启动完成 3 秒后**才跑，
+                // 结果写进同一个调试日志里。
+                //
+                // ⚠️ 需要**重启 Spotify** 才生效：probe 的调度发生在 tweak 初始化那一刻。
+                Toggle(
+                    "ngzhwm_track_probe".localized,
+                    isOn: Binding<Bool>(
+                        get: { UserDefaults.enableTrackProbe },
+                        set: { UserDefaults.enableTrackProbe = $0 }
+                    )
+                )
+                Text("ngzhwm_track_probe_description".localized)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             }
             
             Section(footer: Text("reset_data_description".localized)) {
