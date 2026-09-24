@@ -77,8 +77,20 @@ class HttpClientURLSessionHook: ClassHook<NSObject>, SpotifySessionDelegate {
                     customLyricsData = try? getLyricsDataForCurrentTrack(url.path, originalLyrics: originalLyrics)
                     semaphore.signal()
                 }
-                _ = semaphore.wait(timeout: .now() + .milliseconds(18000))
-                orig.URLSession(session, dataTask: task, didReceiveData: customLyricsData ?? buffer)
+                let waitResult = semaphore.wait(timeout: .now() + .milliseconds(18000))
+                // 同 SPTDataLoaderService：预算内没拿到词也要给一份可解析的占位，
+                // 否则这次歌词请求等于"没有响应"，NPV 不会创建歌词卡片。
+                // 见 `unavailableLyricsBytes`（CustomLyrics.x.swift 文件作用域函数）。
+                let lyricsPayload: Data
+                if let customLyricsData {
+                    lyricsPayload = customLyricsData
+                } else if waitResult == .timedOut {
+                    writeDebugLog("[HCUS] lyrics fetch exceeded the 18s budget — serving fallback payload")
+                    lyricsPayload = unavailableLyricsBytes(original: originalLyrics) ?? buffer
+                } else {
+                    lyricsPayload = buffer
+                }
+                orig.URLSession(session, dataTask: task, didReceiveData: lyricsPayload)
                 orig.URLSession(session, task: task, didCompleteWithError: nil)
                 return
             }
@@ -126,8 +138,11 @@ class HttpClientURLSessionHook: ClassHook<NSObject>, SpotifySessionDelegate {
         // delegate queue and prevent subsequent delegate callbacks from firing.
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let data = try? getLyricsDataForCurrentTrack(url.path)
+            // 同 SPTDataLoaderService：404 也要给出 200 + 占位，
+            // 否则 Spotify 不会为这首歌创建歌词卡片。见 `unavailableLyricsBytes`。
+            let payload = data ?? unavailableLyricsBytes(original: nil)
 
-            guard let lyricsData = data,
+            guard let lyricsData = payload,
                   let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: [:]) else {
                 handler(.allow)
                 orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: { _ in })

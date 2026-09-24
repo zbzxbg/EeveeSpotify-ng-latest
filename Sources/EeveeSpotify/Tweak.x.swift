@@ -236,6 +236,60 @@ func eeveeEnvFlag(_ name: String) -> Bool {
     return s == "1" || s == "true" || s == "yes" || s == "y"
 }
 
+/// 枚举运行时里"同时提供 `metadata` 与 `URI` 的类"，用来定位 9.1.x 上真正的
+/// track 类 —— 也就是 `has_lyrics` 覆写应该挂在哪个类上。
+///
+/// 背景：`CustomLyrics+AllTracksLyrics.swift` 里的 `SPTPlayerTrackHook` 仍然按版本号
+/// 猜类名（`EeveeSpotify.hookTarget == .latest ? "SPTPlayerTrackImplementation" : "SPTPlayerTrack"`），
+/// 而 9.1.x 被判成 `.v91`，于是它去挂 `SPTPlayerTrack`；可是 9.1.86 的类表里
+/// **两个名字都不存在**（`Scripts/dump-spotify-symbols.py` 的 [classes] 桶里搜
+/// `PlayerTrack`，只有 `StatefulPlayerTrackPositionImplementation` 等几个无关类）。
+/// 那条 hook 一旦绑不上，`has_lyrics = "true"` 就从来没有被写进去过。
+///
+/// 这个探针只打日志、不改任何行为：日志里出现的那一行就是应该写进 `targetName` 的类名。
+/// 只在"歌词功能启用 + 日志记录开启"时跑一次，代价是遍历一次 objc 类表。
+func logPlayerTrackCandidates() {
+    // `metadata()` / `URI()` 是 track 类在 ObjC 侧已有的两个方法 —— 本仓库的
+    // `@objc protocol SPTPlayerTrack` 就是这么声明的。这里不假设任何类名，
+    // 直接枚举运行时里"同时实现这两个方法"的类。
+    let metadataSelector = Selector(("metadata"))
+    let uriSelector = Selector(("URI"))
+
+    for className in ["SPTPlayerTrackImplementation", "SPTPlayerTrack"] {
+        writeDebugLog("[TrackProbe] \(className) exists: \(NSClassFromString(className) != nil)")
+    }
+
+    // selector 不存在说明这个版本的 track 类连 ObjC 方法名都换了，
+    // 那就没有任何候选可言 —— 直接说清楚，别去遍历类表然后按 URI 刷一屏。
+    guard let metadataSelector, let uriSelector else {
+        writeDebugLog("[TrackProbe] metadata()/URI() selector missing on this build — cannot locate the track class")
+        return
+    }
+
+    // 用 `objc_copyClassList` 而不是 `objc_getClassList`：前者直接返回
+    // "已注册类"缓冲区的所有权，省掉 `AutoreleasingUnsafeMutablePointer` 那层
+    // 容易写错、也容易在 Swift 版本间不兼容的指针转换。用完 `free` 掉即可。
+    var classCount: UInt32 = 0
+    guard let classList = objc_copyClassList(&classCount), classCount > 0 else {
+        writeDebugLog("[TrackProbe] objc_copyClassList returned nothing")
+        return
+    }
+    defer { free(classList) }
+
+    var candidates: [String] = []
+    for index in 0..<Int(classCount) {
+        let cls: AnyClass = classList[index]
+        // 只看"同时有 metadata 与 URI"的类：数量很少，不会刷屏。
+        guard class_getInstanceMethod(cls, metadataSelector) != nil,
+              class_getInstanceMethod(cls, uriSelector) != nil else {
+            continue
+        }
+        candidates.append(NSStringFromClass(cls))
+    }
+
+    writeDebugLog("[TrackProbe] \(candidates.count) class(es) expose metadata()+URI(): \(candidates.sorted().joined(separator: ", "))")
+}
+
 struct EeveeSpotify: Tweak {
     static let version = "6.6.8"
     static let buildNumber = "2"
@@ -427,6 +481,11 @@ struct EeveeSpotify: Tweak {
                     writeDebugLog("[INIT] Skipped ng lyrics groups (no lyrics host on this build)")
                 }
 
+                // 定位"has_lyrics 应该写进哪个类"：只在开了日志记录时跑一次，
+                // 结果不出现在界面上，只写日志。见 `logPlayerTrackCandidates` 的说明。
+                if UserDefaults.enableLogRecording {
+                    logPlayerTrackCandidates()
+                }
             }
 
             // Settings integration (guarded)

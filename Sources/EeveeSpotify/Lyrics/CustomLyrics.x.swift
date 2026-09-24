@@ -334,7 +334,20 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             return nil
         }
 
-        return Lyrics.with {
+        return makeUnavailableLyrics(originalColors: original?.colors, note: nil)
+    }
+
+    /// 构造「没有歌词」的替身 payload —— 与 `unavailableLyricsPayload` 同一份内容，
+    /// 但不带任何用户开关判断：**调用方已经决定"必须给出一个响应"**。
+    ///
+    /// 抽出来的原因：现在有两个调用方，一个是下面这个"要不要替换官方歌词"的策略判断，
+    /// 另一个是 URLSession 侧的"响应兜底"（见 `unavailableLyricsBytes`）。
+    /// 两处必须长得一模一样，否则用户会在不同失败路径上看到不同文案。
+    ///
+    /// - Parameter note: 追加在提示行之后的一句说明（例如"这首歌正在切换"）。
+    ///   传 nil 时保持与历史上完全一致的三行内容。
+    func makeUnavailableLyrics(originalColors: LyricsColors?, note: String?) -> Lyrics {
+        Lyrics.with {
             $0.data = LyricsData.with {
                 $0.timeSynchronized = false
                 $0.restriction = .unrestricted
@@ -347,13 +360,21 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                         $0.content = "ngzhwm_lyrics_unavailable_hint".localized
                     },
                 ]
+                if let note, !note.isEmpty {
+                    $0.lines.append(LyricsLine.with { $0.content = note })
+                }
             }
             // 颜色沿用 Spotify 原来那份：背景色 / 歌名配色保持原样，看不出被替换过。
-            if let original = original {
-                $0.colors = original.colors
+            if let originalColors {
+                $0.colors = originalColors
             }
         }
     }
+
+    // MARK: - 「绝不空手而归」的响应兜底
+    //
+    // `unavailableLyricsBytes` 是文件作用域函数（见本文件 `getLyricsDataForCurrentTrack` 上方）：
+    // 调用方是 URLSession 的两个钩子，属"这次响应交什么字节"的纯数据问题。
 
     /// 把 dto 落到全局状态上（**唯一**写入口）。
     ///
@@ -423,6 +444,54 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         }
     }
 
+// MARK: - 「绝不空手而归」的响应兜底
+
+/// URLSession 钩子侧的兜底 payload 计数器（只为了不在日志里刷屏）。
+private var urlSessionFallbackCount = 0
+
+/// 歌词请求的**响应兜底**：只要 URL 是 `color-lyrics/v2`，钩子就必须交给 Spotify
+/// 一个可解析的 `Lyrics` —— 这是 910 时代 `InterceptionContext` 那条底线。
+///
+/// 为什么必须有它：9.1.x 的 NPV 歌词卡片是**等歌词数据到达才创建**的
+/// （`CustomLyrics+AllTracksLyrics.x.swift` 里 `NPVScrollViewController.viewWillAppear`
+/// 的说明）。如果某个失败路径让这次请求"什么都不返回"（`didCompleteWithError` 只报
+/// completion、不投递数据），Spotify 就不会建卡片；而没有卡片，连全屏歌词页的入口
+/// 也不存在 —— 用户看到的就是"这首歌没有歌词模块"，比"有模块但写着未找到歌词"严重得多。
+///
+/// 放在文件作用域（而不是 `CustomLyrics` 扩展里）：调用方是 URLSession 那两个钩子，
+/// 它们拿到的是"这次响应到底交什么字节"这个纯数据问题，跟歌词仓库的加载逻辑无关。
+/// 里面也不读任何用户开关 —— 「隐藏 Spotify 官方歌词」只决定**要不要顶掉官方歌词**，
+/// 不决定"能不能一个字节都不给"。
+///
+/// - Parameter original: Spotify 原始响应解析出来的歌词（可能是 200 的官方歌词，
+///   也可能因为 404 而没有）。它只用来**沿用配色**，内容一律用我们自己的占位。
+/// - Parameter note: 追加说明行，见 `CustomLyrics.makeUnavailableLyrics`。
+/// - Returns: 可直接投给 `didReceiveData` 的字节；只有序列化失败这种理论上不会发生的
+///   情况才返回 nil（那时调用方退回原始响应）。
+func unavailableLyricsBytes(original: Lyrics?, note: String? = nil) -> Data? {
+    var lyrics = makeUnavailableLyrics(originalColors: original?.colors, note: note)
+    // 404 场景下没有原始歌词可继承配色，给一套中性配色，
+    // 避免客户端拿到全 0 颜色把整页刷成纯黑。
+    if original == nil {
+        lyrics.colors = LyricsColors.with {
+            $0.backgroundColor = 0xFF12_1212
+            $0.lineColor = 0xFF9E_9E9E
+            $0.activeLineColor = 0xFFFF_FFFF
+        }
+    }
+
+    guard let data = try? lyrics.serializedBytes() else {
+        writeErrorLog("[Lyrics] fallback payload failed to serialize — lyrics response will be dropped")
+        return nil
+    }
+
+    urlSessionFallbackCount += 1
+    if urlSessionFallbackCount <= 5 || urlSessionFallbackCount % 20 == 0 {
+        writeDebugLog("[Lyrics] serving fallback payload for this response (#\(urlSessionFallbackCount))")
+    }
+    return data
+}
+
 func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics? = nil) throws -> Data {
     writeDebugLog("[Lyrics] Request for \(originalPath)")
     guard !NgzhwmSettingsViewModel.isLyricsFeatureDisabled else {
@@ -463,27 +532,36 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     do {
         lyrics = try loadCustomLyricsForCurrentTrack()
     } catch let error {
-        // 这一首没能用上我们的歌词（界面本来会退回 Spotify 自己的官方歌词）→
-        //   1. 先把逐词层的状态清干净：不清的话上一个 overlay 会继续盖着原生歌词
-        //      显示**上一首**的内容，连底部的来源注解也是上一首的；
-        //   2. 再按「隐藏 Spotify 官方歌词」开关决定要不要用我们自己的占位 payload
-        //      把官方歌词顶掉（见 `unavailableLyricsPayload`）。
+        // 这一首没能用上我们的歌词 → 决定**这次 HTTP 响应交什么出去**。
         //
-        // ⚠️ 三种错误不动：`.trackMismatch` / `.noCurrentTrack` 表示"这次请求不是
-        // 针对当前这首歌"（Spotify 会预取别的歌、或启动时序还没对齐）；
-        // `.invalidSource` 是"用户选了禁用歌词替换"（明确要看官方歌词）。
-        // 这三种都跟"屏幕上这首歌没词"无关，动了等于把好好的歌词一起清掉。
-        switch error as? LyricsError {
-        case .some(.trackMismatch), .some(.noCurrentTrack):
-            break
-        case .some(.invalidSource):
-            break
-        default:
+        // 两种错误必须原样放行（它们跟"屏幕上这首歌有没有词"无关）：
+        //   · `.invalidSource` = 用户明确选了「禁用歌词替换」，要看官方歌词；
+        //   · `.noSuchSong` 等真·取词失败：交给下面的占位逻辑（「隐藏 Spotify 官方歌词」
+        //     开着就顶掉官方歌词，关着就放行官方歌词）。
+        //
+        // ⚠️ `.trackMismatch` / `.noCurrentTrack` 以前也是"原样放行"，结果是这次请求
+        // **一个字节都不投递**：Spotify 侧等不到歌词数据 → 不创建 NPV 歌词卡片 →
+        // 连全屏歌词入口都没有（这就是"有些歌完全没有歌词模块"最重的那条路径）。
+        // 现在它们也和其它失败一样，一定给出一份可解析的占位，保证卡片建得起来。
+        let lyricsError = error as? LyricsError
+        let shouldDropResponse = lyricsError == .invalidSource
+        // 切歌竞态单独加一句说明：用户看到"未找到歌词"时能立刻分清这不是词库的问题。
+        let placeholderNote: String? = lyricsError == .trackMismatch ? "track_mismatch".localized : nil
+
+        if !shouldDropResponse {
             resetWordByWordLyrics()
             // 别让 Spotify 把它自己的官方歌词顶上来 —— 用我们自己的占位替换掉。
             if let placeholder = unavailableLyricsPayload(original: originalLyrics) {
                 writeDebugLog("[Lyrics] official lyrics hidden — serving our placeholder")
                 return try placeholder.serializedBytes()
+            }
+            // 「隐藏官方歌词」关着 → 本来该放行官方歌词。但如果是 trackMismatch /
+            // noCurrentTrack，连"官方歌词"都不能确定属于这一首，同样不能空手而归。
+            if lyricsError == .trackMismatch || lyricsError == .noCurrentTrack {
+                writeDebugLog("[Lyrics] \(lyricsError!) — serving fallback so the card is created")
+                if let data = unavailableLyricsBytes(original: originalLyrics, note: placeholderNote) {
+                    return data
+                }
             }
         }
         throw error

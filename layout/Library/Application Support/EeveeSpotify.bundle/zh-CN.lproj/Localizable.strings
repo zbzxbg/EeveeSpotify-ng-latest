@@ -144,6 +144,7 @@ ngzhwm_hide_official_lyrics = "隐藏Spotify官方歌词";
 ngzhwm_hide_official_lyrics_description = "选项开启后，如果自定义歌词源没有取到歌词，界面不会再显示Spotify自带的歌词（那些歌词的来源、是否罗马化都不受本插件控制），而是显示一条提示。关闭后恢复显示Spotify自带的歌词。";
 ngzhwm_lyrics_unavailable = "未找到歌词";
 ngzhwm_lyrics_unavailable_hint = "可以在设置里换一个歌词来源，或稍后重试。";
+track_mismatch = "取词期间切了歌，重新播放这一首即可获取歌词。";
 // Debug
 
 debug_title = "调试";

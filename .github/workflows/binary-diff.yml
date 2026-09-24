@@ -77,12 +77,34 @@ jobs:
       - name: Extract Spotify version
         id: ver
         run: |
-          sudo apt-get install -y libplist-utils >/dev/null 2>&1 || true
-          SPOT_VERSION=$(unzip -p spotify.ipa 'Payload/Spotify.app/Info.plist' \
-              | plutil -extract CFBundleShortVersionString raw - 2>/dev/null \
-              || echo "unknown")
-          echo "version=$SPOT_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Spotify version: $SPOT_VERSION"
+          # ⚠️ 这里原来是：
+          #     SPOT_VERSION=$(unzip -p ... | plutil -extract CFBundleShortVersionString raw - \
+          #                    || echo "unknown")
+          # `||` 在 `$()` 里给**整个管道**兜底 —— plutil 一失败，`echo "unknown"` 的
+          # 输出就**变成版本号**，于是后面全变成 dump-unknown.txt / symbol-diff-unknown。
+          # （实测踩过：artifact 名字就是 symbol-diff-unknown.zip。）
+          #
+          # 另外 `plutil -` 从 stdin 读在 Linux 上本来就不稳（依赖 libplist-utils 是否
+          # 真的装上），而 Info.plist 很可能是二进制 plist。
+          #
+          # 改用 python3 标准库 `plistlib`：原生同时支持 XML 与二进制 plist，
+          # ubuntu runner 上必定可用，零外部依赖 —— 和 dump 脚本同一套思路。
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import plistlib, zipfile
+          version = "unknown"
+          try:
+              with zipfile.ZipFile("spotify.ipa") as z:
+                  names = [n for n in z.namelist()
+                           if n.startswith("Payload/") and n.endswith(".app/Info.plist")]
+                  if names:
+                      info = plistlib.loads(z.read(names[0]))
+                      version = str(info.get("CFBundleShortVersionString") or "unknown")
+          except Exception as exc:
+              print("::warning::version probe failed: %r" % (exc,))
+          print("version=%s" % version)
+          PY
+          # 把结果回显到日志（$GITHUB_OUTPUT 的内容不会自动出现在日志里）
+          echo "Spotify version: $(grep '^version=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
 
       - name: Dump symbols
         run: |

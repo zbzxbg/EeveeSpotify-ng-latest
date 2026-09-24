@@ -112,8 +112,20 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
                     semaphore.signal()
                 }
 
-                _ = semaphore.wait(timeout: .now() + .milliseconds(18000))
-                let lyricsPayload = customLyricsData ?? buffer
+                let waitResult = semaphore.wait(timeout: .now() + .milliseconds(18000))
+                // ⚠️ 超时以前只是"退回 Spotify 原始响应"，这里必须补一层兜底：
+                // 取词没能在预算内完成时（`customLyricsData` 仍是 nil），仍然交一份
+                // 可解析的占位。原因是 NPV 的歌词卡片**等数据到达才创建** —— 一个字节
+                // 都不投递就等于"这首歌没有歌词模块"，比内容不完美严重得多。
+                let lyricsPayload: Data
+                if let customLyricsData {
+                    lyricsPayload = customLyricsData
+                } else if waitResult == .timedOut {
+                    writeDebugLog("[DL] lyrics fetch exceeded the 18s budget — serving fallback payload")
+                    lyricsPayload = unavailableLyricsBytes(original: originalLyrics) ?? buffer
+                } else {
+                    lyricsPayload = buffer
+                }
                 DispatchQueue.main.async { [self] in
                     orig.URLSession(session, dataTask: task, didReceiveData: lyricsPayload)
                     orig.URLSession(session, task: task, didCompleteWithError: nil)
@@ -173,10 +185,18 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
 
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let data = try? getLyricsDataForCurrentTrack(url.path)
+            // 取词失败（或返回 nil）时也要给出一份占位：这条路径的原始响应是 404，
+            // 放行 404 = Spotify 不创建歌词卡片 = 这首歌看起来"根本没有歌词模块"。
+            let payload = data ?? unavailableLyricsBytes(original: nil)
 
-            guard let lyricsData = data,
-                  let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: [:]) else {
-                // Fetch failed — let Spotify handle the original non-200 response.
+            guard let lyricsData = payload else {
+                // 连占位都构造不出来（序列化失败，几乎不可能）——只能放行原始响应。
+                handler(.allow)
+                orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: { _ in })
+                return
+            }
+
+            guard let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: [:]) else {
                 handler(.allow)
                 orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: { _ in })
                 return

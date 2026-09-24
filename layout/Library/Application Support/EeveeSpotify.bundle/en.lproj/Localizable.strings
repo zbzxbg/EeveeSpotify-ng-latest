@@ -150,6 +150,7 @@ ngzhwm_hide_official_lyrics = "Hide Spotify's Official Lyrics";
 ngzhwm_hide_official_lyrics_description = "When enabled, if your custom lyrics source has no lyrics for the track, Spotify's own lyrics are no longer shown (their provider and romanization are outside this tweak's control) — a short notice is shown instead. Disable this to fall back to Spotify's own lyrics.";
 ngzhwm_lyrics_unavailable = "No lyrics found";
 ngzhwm_lyrics_unavailable_hint = "Try another lyrics source in Settings, or try again later.";
+track_mismatch = "The track changed while lyrics were loading. Play it again to fetch lyrics.";
 // Debug
 
 debug_title = "Debug";

@@ -387,7 +387,32 @@ private let propertyReplacements = [
     EeveePropertyReplacement(name: "is_lyrics_share_enabled", modification: .forceBool(true)),
     EeveePropertyReplacement(name: "lyrics_shareable", modification: .forceBool(true)),
     EeveePropertyReplacement(name: "enable_share_link_preview_uploads", modification: .forceBool(true)),
-    EeveePropertyReplacement(name: "enable_sharing_v2", modification: .forceBool(true))
+    EeveePropertyReplacement(name: "enable_sharing_v2", modification: .forceBool(true)),
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 歌词可用性检查旁路 —— 让"没有官方歌词的歌"也有歌词模块
+    // ─────────────────────────────────────────────────────────────────────
+    //
+    // 名字逐字来自 9.1.86 解密二进制的 feature-flag 表
+    // （`Scripts/dump-spotify-symbols.py` 的 [flags] 桶里确实存在
+    // `enable_has_lyrics_check_bypass`，旁边还有 `enable_lyrics`）。
+    // 也就是说「这首歌有没有歌词」在客户端是一道**开关控制的检查**：
+    //   · `enable_lyrics`                    —— 歌词功能总开关；
+    //   · `enable_has_lyrics_check_bypass`   —— 跳过「has_lyrics 吗」的检查，
+    //     正是"每首歌都要有歌词模块"需要的那一个。
+    //
+    // 客户端读的是 track 元数据里的 `has_lyrics` 键（真机日志的
+    // `[Artwork] metadata keys:` 一行里逐字可见）。EeveeSpotify 从 910 起就在
+    // `SPTPlayerTrackHook.metadata()` 里把它覆写成 "true"，但那条 hook 现在挂在
+    // 9.1.x 上不存在的类上（见 CustomLyrics+AllTracksLyrics.x.swift），
+    // 于是真正能生效的就只剩这条服务端配置旁路 —— 所以两个候选 scope 各一份。
+    // RemoteConfig 按 scope 取值：种错 scope 没有任何副作用，种对了就少一层门控。
+    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", scope: "ios-feature-lyrics", modification: .forceBool(true)),
+    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", scope: "ios-lyrics-npvcommunicator-impl", modification: .forceBool(true)),
+    EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", modification: .forceBool(true)),
+    // 总开关：会话中途被服务端改回 false 会让歌词整体消失，这里钉死为 true。
+    EeveePropertyReplacement(name: "enable_lyrics", scope: "ios-feature-lyrics", modification: .forceBool(true)),
+    EeveePropertyReplacement(name: "enable_lyrics", modification: .forceBool(true))
 ]
 
 private func modifyAssignedValues(_ values: inout [AssignedValue]) {
