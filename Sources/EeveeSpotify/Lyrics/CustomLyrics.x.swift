@@ -480,7 +480,7 @@ func unavailableLyricsBytes(original: Lyrics?, note: String? = nil) -> Data? {
         }
     }
 
-    guard let data = try? lyrics.serializedBytes() else {
+    guard let data = try? lyrics.serializedBytes() as Data else {
         writeErrorLog("[Lyrics] fallback payload failed to serialize — lyrics response will be dropped")
         return nil
     }

@@ -252,6 +252,10 @@ func logPlayerTrackCandidates() {
     // `metadata()` / `URI()` 是 track 类在 ObjC 侧已有的两个方法 —— 本仓库的
     // `@objc protocol SPTPlayerTrack` 就是这么声明的。这里不假设任何类名，
     // 直接枚举运行时里"同时实现这两个方法"的类。
+    //
+    // ⚠️ 注意这个工具链里 `Selector(_:)` 返回的是**非 Optional**（Foundation 的
+    // `Selector` 与 `ObjectiveC.Selector` 之间的差异），所以这里不能用
+    // `guard let` 绑定，否则编译器直接报"条件绑定的绑定值必须是 Optional"。
     let metadataSelector = Selector(("metadata"))
     let uriSelector = Selector(("URI"))
 
@@ -259,22 +263,19 @@ func logPlayerTrackCandidates() {
         writeDebugLog("[TrackProbe] \(className) exists: \(NSClassFromString(className) != nil)")
     }
 
-    // selector 不存在说明这个版本的 track 类连 ObjC 方法名都换了，
-    // 那就没有任何候选可言 —— 直接说清楚，别去遍历类表然后按 URI 刷一屏。
-    guard let metadataSelector, let uriSelector else {
-        writeDebugLog("[TrackProbe] metadata()/URI() selector missing on this build — cannot locate the track class")
-        return
-    }
-
-    // 用 `objc_copyClassList` 而不是 `objc_getClassList`：前者直接返回
-    // "已注册类"缓冲区的所有权，省掉 `AutoreleasingUnsafeMutablePointer` 那层
-    // 容易写错、也容易在 Swift 版本间不兼容的指针转换。用完 `free` 掉即可。
+    // 用 `objc_copyClassList`（不是 `objc_getClassList`）：
+    //   · 它一次调用就返回"已注册类"缓冲区的**所有权**，签名干净
+    //     （`objc_getClassList` 的缓冲区参数是 `AutoreleasingUnsafeMutablePointer<AnyClass>`，
+    //     在"传 nil 拿计数"和"传缓冲区"两种调用上容易踩类型推断的坑）；
+    //   · 它返回的是 `AutoreleasingUnsafeMutablePointer<AnyClass>` —— 编译器报错原文
+    //     确认了这个类型，而它**不能**直接交给 `free()`。要先
+    //     `UnsafeMutableRawPointer(...)` 转成裸指针再 free，这一步是必需的。
     var classCount: UInt32 = 0
     guard let classList = objc_copyClassList(&classCount), classCount > 0 else {
         writeDebugLog("[TrackProbe] objc_copyClassList returned nothing")
         return
     }
-    defer { free(classList) }
+    defer { free(UnsafeMutableRawPointer(classList)) }
 
     var candidates: [String] = []
     for index in 0..<Int(classCount) {
