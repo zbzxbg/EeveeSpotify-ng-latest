@@ -208,6 +208,29 @@ struct EeveeSettingsView: View {
                     }
                     .foregroundColor(.red)
                 }
+
+                // ── 排障：强制歌词 payload ────────────────────────────────────────
+                //
+                // 详见 `UserDefaults.forcedLyricsPayload` 的说明。用来把"payload 质量"与
+                // "Spotify 侧门控"这两个变量分开 —— **两个方向都要测**：
+                //   · good        → 给失败曲目喂 34 行真实时间轴
+                //   · placeholder → 给 SECRET 喂 3 行无时间轴
+                // 文案刻意用字面量：临时排障项，不进 Localizable.strings。测完调回「关」。
+                Divider()
+                Picker(
+                    "强制歌词 payload（排障）",
+                    selection: Binding<String>(
+                        get: { UserDefaults.forcedLyricsPayload },
+                        set: { UserDefaults.forcedLyricsPayload = $0 }
+                    )
+                ) {
+                    Text("关（正常）").tag("")
+                    Text("good：34 行真实时间轴").tag("good")
+                    Text("placeholder：3 行无时间轴").tag("placeholder")
+                }
+                Text("判断「歌词卡片不出现」是 payload 不够好，还是 Spotify 侧的门控。测完请调回「关」。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             }
             
             Section(footer: Text("reset_data_description".localized)) {

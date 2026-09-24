@@ -15,6 +15,7 @@ extension UserDefaults {
     private static let iconNamePrettifyKey = "iconNamePrettify"
     private static let cleanShareLinksKey = "cleanShareLinks"
     private static let enableLogRecordingKey = "enableLogRecording"
+    private static let forcedLyricsPayloadKey = "ngzhwm_forcedLyricsPayload"
 
     static var musixmatchToken: String {
         get {
@@ -110,6 +111,33 @@ extension UserDefaults {
         }
         set {
             container.set(newValue, forKey: enableLogRecordingKey)
+        }
+    }
+
+    /// **排障开关**：强制替换交出去的歌词 payload，用来把"payload 质量"与
+    /// "Spotify 侧门控"这两个变量分开。
+    ///
+    /// 取值：`""`（关，默认） / `"good"` / `"placeholder"`。
+    ///
+    /// 为什么要它：**歌词卡片**（与「关于艺人」并列那块）只有 MIMI 的 SECRET 会出现。
+    /// 它和失败曲目在 payload 上有两个可见差别 —— 行数（34 vs 3–7）与时间轴真假
+    /// （真实 vs 合成）。但"失败曲目 payload 差"和"Spotify 那边就没词"这两件事
+    /// 一直是绑在一起的，分不开。
+    ///
+    /// 这个开关把 payload 变成唯一自变量，**两个方向都要试**（只试一个方向会留下
+    /// "伪造的 payload 仍然不够好"这个死角）：
+    ///   · `good`        ← 给失败曲目喂 34 行**真实时间轴**；卡片出现 ⇒ payload 是关键
+    ///   · `placeholder` ← 给 SECRET 喂 3 行**无时间轴**；卡片消失 ⇒ payload 是关键
+    /// 两个方向都不动 ⇒ 门控在 Spotify 侧，payload 无关 ⇒ 转自绘兜底。
+    ///
+    /// 实现见 `CustomLyrics.x.swift` 的 `loadCustomLyricsForCurrentTrack`：它会**绕开**
+    /// 整条取词链和 `toSpotifyLyricsData`，所以「合成行级时间轴」开关对它无效。
+    static var forcedLyricsPayload: String {
+        get {
+            container.string(forKey: forcedLyricsPayloadKey) ?? ""
+        }
+        set {
+            container.set(newValue, forKey: forcedLyricsPayloadKey)
         }
     }
 }
