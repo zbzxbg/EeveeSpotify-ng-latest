@@ -183,6 +183,44 @@ enum SpotifyResponsePatcher {
         }
     }
 
+    // MARK: 歌词响应的**原始**状态码与响应头
+
+    /// 诊断：记录 `color-lyrics` 响应的原始状态与响应头。
+    ///
+    /// 为什么盯这个 —— 它是**最后一个没查过的本地变量**：
+    ///
+    ///   · 我们的 `didReceiveResponse` 钩子对**非 200**（404）会**合成**一个 200 交付，
+    ///     而且 `headerFields: [:]` —— **响应头是空的**；
+    ///   · 对**200** 则是**原样放行**原始响应，**带真实响应头**，只在后面替换 body。
+    ///
+    /// 于是"200 + 空歌词"的歌，客户端看到的是**原始的**头；而 SECRET（有词）看到的是
+    /// "200 + 真实体 + 真实头"。**如果客户端是看响应头（或体长）决定建不建卡片，这份
+    /// 日志就能看出来 —— 而且我们能改成"合成一份有歌词的响应头"交付，那就是原生修复。**
+    ///
+    /// 反过来，如果两者头一样，头部就不是判据，那这篇排查就该收尾去做自绘兜底了。
+    ///
+    /// 只读、只打日志；同一 path 只报一次。
+    private static var _probeHeaderReported = Set<String>()
+
+    static func probeLyricsResponseHeaders(url: URL, response: HTTPURLResponse) {
+        guard url.isLyrics else { return }
+
+        lock.lock()
+        let isNew = _probeHeaderReported.insert(url.path).inserted
+        lock.unlock()
+        guard isNew else { return }
+
+        let headers = response.allHeaderFields
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+            .joined(separator: " | ")
+        let length = response.value(forHTTPHeaderField: "Content-Length") ?? "-"
+        writeDebugLog(
+            "[LyricsHeader] status=\(response.statusCode) len=\(length)"
+                + " path=\(url.path) headers=[\(headers)]"
+        )
+    }
+
     static func shouldBlock(_ url: URL) -> Bool {
         let elapsed = Date().timeIntervalSince(tweakInitTime)
         let path = url.path.lowercased()

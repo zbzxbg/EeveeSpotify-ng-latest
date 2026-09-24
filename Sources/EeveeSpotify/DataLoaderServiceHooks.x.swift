@@ -168,6 +168,12 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             return
         }
 
+        // 诊断：记录歌词响应的原始状态与响应头（**200 与 404 两种都记**）。
+        // 见 `SpotifyResponsePatcher.probeLyricsResponseHeaders` 的说明。
+        if let probeURL = task.currentRequest?.url {
+            SpotifyResponsePatcher.probeLyricsResponseHeaders(url: probeURL, response: response)
+        }
+
         // Lyrics 4xx/5xx — replace with our custom fetch result so the
         // consumer doesn't show "no lyrics available".
         //

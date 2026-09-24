@@ -128,6 +128,12 @@ class HttpClientURLSessionHook: ClassHook<NSObject>, SpotifySessionDelegate {
             return
         }
 
+        // 诊断：记录歌词响应的原始状态与响应头（**200 与 404 两种都记**）。
+        // 见 `SpotifyResponsePatcher.probeLyricsResponseHeaders` 的说明。
+        if let probeURL = task.currentRequest?.url {
+            SpotifyResponsePatcher.probeLyricsResponseHeaders(url: probeURL, response: response)
+        }
+
         guard let url = task.currentRequest?.url, url.isLyrics, response.statusCode != 200 else {
             orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
             return
