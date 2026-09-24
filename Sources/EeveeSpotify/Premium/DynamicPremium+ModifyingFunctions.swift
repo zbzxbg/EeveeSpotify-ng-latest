@@ -450,7 +450,7 @@ private func dumpLyricsFlags(_ values: [AssignedValue]) {
         switch value.structuredValue {
         case .boolValue(let v)?: rendered = "bool=\(v.value)"
         case .intValue(let v)?:  rendered = "int=\(v.value)"
-        case .enumValue(let v)?: rendered = "enum=\(v.enumValue.value)"
+        case .enumValue(let v)?: rendered = "enum=\(v.value)"
         case nil:                rendered = "unset"
         }
 
