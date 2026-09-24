@@ -1,0 +1,143 @@
+name: Binary Symbol Diff
+
+# Dumps hook-relevant symbols (classes / RPCs / flags / methods) from a new
+# decrypted Spotify IPA and diffs them against the committed rolling baseline
+# (Symbols/baseline-*.txt). Reports CRITICAL findings when classes the tweak
+# hooks vanish (those hooks silently stop working) and HIGH findings when
+# ad/Premium-relevant RPCs change (the FetchMessage/pendragon class of
+# breakage). Run this on every new Spotify release BEFORE shipping a build.
+#
+# ── 移植到本仓库时做的改动 ────────────────────────────────────────────────
+# 1. **允许没有 baseline**：原版在没有 Symbols/baseline-*.txt 时直接
+#    `exit 1`。本仓库尚未提交基线，所以改成"没有基线就把这次 dump 存下来
+#    并跳过对比"，第一次跑就能成功，第二次起才真正开始比对。
+#    想正式立基线时用 refresh_baseline=true 开分支提交。
+# 2. 差异脚本用的是本仓库的 Scripts/diff-symbol-dumps.py —— 它比原版多认一种
+#    hook 目标写法（`"模块.类名"`），否则歌词那一整套目标不会被检查。
+#
+# ── 这个工具的能力边界（别当"能不能跑"的判据）────────────────────────────
+# 只验证"hook 目标的**类名**还在不在"。它查不出：
+#   · 方法签名变化（Orion 是"类 + 选择器"解析，签名变了注册期就失败）
+#   · 行为假设失效（插件按无障碍标签找按钮那一类）
+#   · 运行时依赖能否加载（例如 Orion.framework 有没有打进包）
+# 这些只能装到设备上看日志：[ORION ERROR] Failed to hook method ...
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "URL to a DECRYPTED Spotify IPA"
+        required: true
+        type: string
+      refresh_baseline:
+        description: "Also refresh Symbols/baseline-*.txt with the new dump (branch: diff-baseline-<version>)"
+        default: "false"
+        required: false
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download IPA
+        run: |
+          wget "${{ inputs.ipa_url }}" --no-verbose -O spotify.ipa
+          file_type=$(file --mime-type -b spotify.ipa)
+          [ "$file_type" = "application/zip" ] || {
+            echo "::error::Not a valid IPA: $file_type"; exit 1; }
+
+      - name: Extract Spotify version
+        id: ver
+        run: |
+          sudo apt-get install -y libplist-utils >/dev/null 2>&1 || true
+          SPOT_VERSION=$(unzip -p spotify.ipa 'Payload/Spotify.app/Info.plist' \
+              | plutil -extract CFBundleShortVersionString raw - 2>/dev/null \
+              || echo "unknown")
+          echo "version=$SPOT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Spotify version: $SPOT_VERSION"
+
+      - name: Dump symbols
+        run: |
+          python3 Scripts/dump-spotify-symbols.py spotify.ipa -o "dump-${{ steps.ver.outputs.version }}.txt"
+
+      - name: Pick baseline
+        id: baseline
+        run: |
+          # Latest committed baseline by version sort; fall back to the only one.
+          BASE=$(ls Symbols/baseline-*.txt 2>/dev/null | sort -V | tail -1)
+          if [ -z "$BASE" ]; then
+            # 原版在这里 exit 1。本仓库还没有基线，所以改成"这次只建档、不比对"。
+            echo "::warning::仓库里没有 Symbols/baseline-*.txt —— 本次只生成 dump，不做对比。"
+            echo "::warning::把本次的 dump-*.txt 存成 Symbols/baseline-<版本>.txt 之后，下次才会真正比对。"
+            echo "path=" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=$BASE" >> "$GITHUB_OUTPUT"
+            echo "Baseline: $BASE"
+          fi
+
+      - name: Diff against baseline
+        id: diff
+        if: ${{ steps.baseline.outputs.path != '' }}
+        continue-on-error: true   # exit 3 = CRITICAL findings; still upload the report
+        run: |
+          set +e
+          python3 Scripts/diff-symbol-dumps.py "${{ steps.baseline.outputs.path }}" \
+            "dump-${{ steps.ver.outputs.version }}.txt" \
+            --tweak-sources Sources/EeveeSpotify \
+            -o "report-${{ steps.ver.outputs.version }}.md"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 3 ]; then
+            echo "::error::CRITICAL: hooked classes missing from the new binary — hooks will silently stop working. Read the report artifact."
+          fi
+          exit 0
+
+      - name: Summarise hook target coverage
+        if: ${{ steps.baseline.outputs.path != '' }}
+        run: |
+          # 报告头两行会写出"mangled N 个，点号写法 M 个"，放在摘要里
+          # 让"这次到底检查了多少个目标"一眼可见 —— 全绿但覆盖为 0 是最危险的假安全。
+          grep -m1 'hook 目标覆盖' "report-${{ steps.ver.outputs.version }}.md" || true
+
+      - name: Upload dump + report
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbol-diff-${{ steps.ver.outputs.version }}
+          path: |
+            dump-${{ steps.ver.outputs.version }}.txt
+            report-${{ steps.ver.outputs.version }}.md
+          if-no-files-found: warn
+
+      - name: Print report summary
+        if: ${{ steps.baseline.outputs.path != '' }}
+        run: |
+          {
+            echo "### Spotify ${{ steps.ver.outputs.version }} vs baseline"
+            echo '```'
+            head -40 "report-${{ steps.ver.outputs.version }}.md"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Refresh baseline branch
+        if: ${{ inputs.refresh_baseline == 'true' }}
+        run: |
+          SPOT="${{ steps.ver.outputs.version }}"
+          git config user.name "eevee-baseline-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -b "diff-baseline-${SPOT}"
+          mkdir -p Symbols
+          cp "dump-${SPOT}.txt" "Symbols/baseline-${SPOT}.txt"
+          # keep only the newest 3 baselines to avoid unbounded growth
+          ls -t Symbols/baseline-*.txt 2>/dev/null | sort -V | head -n -3 | xargs -r rm -f
+          git add Symbols/
+          git commit -m "Add symbol baseline for Spotify ${SPOT}"
+          git push origin "diff-baseline-${SPOT}"
