@@ -367,6 +367,21 @@ struct EeveeSpotify: Tweak {
         writeDebugLog("[INIT] Hook target: \(EeveeSpotify.hookTarget)")
         writeDebugLog("[INIT] Patch type: \(UserDefaults.patchType)")
         writeDebugLog("[INIT] Lyrics source: \(UserDefaults.lyricsSource)")
+        // A/B 的**分组标记**：日志里必须能一眼看出这一轮跑的是哪一组。
+        //
+        // 「合成行级时间轴」默认开 —— 按 2026-09-25 的推论，正是它把 payload 标成
+        // `timeSynchronized = true`，于是 Spotify 只画封面下那一行（面 A）而不建
+        // 「歌词」卡片（面 B）。可这个开关以前**只能从"有没有 synthetic line timing
+        // applied"反推**，而"关掉它"那一组恰恰不会打那行 —— 两组日志长得一样，
+        // A/B 等于没分组。补这一行把它钉死（顺带记下另外两个影响 payload 的开关）。
+        writeDebugLog(
+            "[INIT] synthetic line timing: "
+                + "\(NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled ? "ON" : "OFF")"
+                + " | official lyrics hidden: "
+                + "\(NgzhwmSettingsViewModel.isOfficialLyricsHidden ? "ON" : "OFF")"
+                + " | lyrics feature disabled: "
+                + "\(NgzhwmSettingsViewModel.isLyricsFeatureDisabled ? "ON" : "OFF")"
+        )
         writeDebugLog("[INIT] tweakInitTime: \(tweakInitTime)")
 
         // CarPlay crash fix (Issue #16) — safe-gated

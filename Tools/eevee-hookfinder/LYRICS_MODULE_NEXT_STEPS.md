@@ -136,3 +136,61 @@ libdispatch  : _dispatch_call_block_and_release …
 **在没有编译器的会话里改括号密集区域必须逐处复核** —— `edit` 只做字面替换，不校验结构。
 
 > ⚠️ 多轮改动**从未编译验证**（会话内 shell 执行器故障 `0xC0000142`）。每次都靠 CI/本地构建裁决。
+
+---
+
+## 6. 本轮（2026-09-25 白天）：只补判据，不改任何行为
+
+起因是一个待验证的说法：**"9186 上歌词模块出不出现是服务器说了算，不像 910 是本地"**。
+现有取证不支持它（§0/§1：卡片由我们注入的 payload 驱动），但**三条证据都不够硬**，
+所以本轮只做"把判据补齐"，不动 payload / 不动默认值。
+
+### 6.1 `[Flags]` —— 把"猜的 scope"换成真实 scope（`DynamicPremium+ModifyingFunctions.swift`）
+
+新增 `dumpLyricsFlags()` / `reportLyricsReplacementOutcome()`，在 `modifyAssignedValues`
+**改写之前**打印服务器下发的所有含 `lyric` 的 `assignedValues`，并在改写之后打印每条
+歌词替换**命中了几条**。形如：
+
+```
+[Flags] lyrics flag — scope=<真实 scope> name=enable_lyrics bool=true
+[Flags] replacement ios-feature-lyrics.enable_has_lyrics_check_bypass — 0 match(es)
+```
+
+两件事一次解决：
+
+1. `setBool` 只在 `name + scope` **都命中**时才生效，命中 0 条是**静默**的 ——
+   这一行把"scope 猜错了"从"服务端就是这么下发的"里分开（`0 match(es)` 即是空枪）；
+2. **"服务端 flag 是不是闸"的唯一直接判据**：真是闸的话，那条 flag 必然出现在这份
+   清单里。清单里没有 → 服务端侧不存在这样一道闸（比日志 12/13 的间接推论硬）。
+
+### 6.2 `[INIT] synthetic line timing: ON/OFF` —— A/B 的分组标记（`Tweak.x.swift`）
+
+以前只能从"有没有 `synthetic line timing applied`"反推开关状态，而**关掉的那一组
+恰恰不会打那行** —— 两组日志长得一样，A/B 等于没分组。现在启动即打印这一行
+（顺带记下 `official lyrics hidden` / `lyrics feature disabled`，两者同样影响 payload）。
+
+### 6.3 `[ScrollProbe] … hex…` —— 修正 `no needle` 的证据等级（`SpotifyResponsePatcher.swift`）
+
+`no needle`（在 scrollsita 响应里扫不到 `yric`）**不能**当作"服务器没下发歌词元素"：
+scrollsita 是 protobuf，元素类型极可能是**枚举整数**，字符串永远不会出现。
+现在额外把响应体前 512 字节按 hex 打出来（每 path 最多 3 次、只在体积变大时），
+让"两条响应差在哪个字段"可以离线比对。
+
+### 6.4 仍然悬着的事（顺序不能反）
+
+1. **A/B 还没跑**（§3.2）：同曲 `5utfun3R35e5AsBalPSxBe`，设置里关掉「合成行级时间轴」。
+   - 卡片**回来** ⇒ §0 那条推论成立：该开关默认值应改为**关**（要的是卡片），
+     或改成"只在没有卡片时补时间轴兜底面 A"；
+   - 卡片**不回来** ⇒ payload 面这条解释不成立，回到"服务器元素列表"那条线
+     （用 6.3 的 hex 比对），再不行才谈自绘。
+2. **默认值暂不翻**：没有真机 A/B 之前翻默认值只是换个方向瞎猜，而且会把面 A
+   （封面下单行）一起改掉。
+3. **启动崩溃**（两份 `.ips` 同一地址）仍是真机验证的前置条件。
+
+### 6.5 本轮验证状态（说清楚）
+
+- **没有编译验证**：本会话 shell 执行器再次故障（`pwsh` 一律 `0xC0000142`），
+  连括号配平检查都跑不了。三处改动是**人工逐处复核**的：
+  改动均为"新增函数 + 新增日志行"，唯一的控制流改动是 `modifyAssignedValues`
+  的头部多一次 `dumpLyricsFlags(values)`、尾部多一次 `reportLyricsReplacementOutcome(values)`；
+- 因此**必须由 CI/本地构建裁决**，且这三条日志要真机各跑一次才有结论。

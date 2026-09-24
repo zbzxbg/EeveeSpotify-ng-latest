@@ -423,7 +423,63 @@ private let propertyReplacements = [
     EeveePropertyReplacement(name: "enable_lyrics", modification: .setBool(true))
 ]
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 歌词相关 flag 取证（只读、只打日志、不改任何字节）
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// 为什么需要它：`enable_lyrics` / `enable_has_lyrics_check_bypass` 这些开关的
+// **scope 名一直是我们猜的**（见上面 `propertyReplacements` 末尾那段注释），
+// 而 `setBool` 只在 `name + scope` **都命中**时才生效 —— scope 猜错，这一枪就是空的，
+// 而且**静默**：日志里没有任何痕迹能区分"服务端关了这个开关"和"我们根本没改到"。
+//
+// 服务器下发的 `assignedValues` 本来就带着真实的 `scope` 与 `name`，所以在改写它们
+// **之前**先把含 "lyric" 的全部原样打出来：一次启动就能把真实 scope 钉死。
+//
+// 这同时也是"歌词卡片（面 B）是不是服务端 flag 说了算"这个问题的**唯一直接判据**：
+// 若服务端真有一道闸，那条 flag 必然出现在这份清单里（连同它的取值）。
+private var reportedLyricsFlags = Set<String>()
+private var reportedLyricsReplacements = Set<String>()
+
+private func dumpLyricsFlags(_ values: [AssignedValue]) {
+    for value in values {
+        let name = value.propertyID.name
+        guard name.lowercased().contains("lyric") else { continue }
+
+        let scope = value.propertyID.scope
+        let rendered: String
+        switch value.structuredValue {
+        case .boolValue(let v)?: rendered = "bool=\(v.value)"
+        case .intValue(let v)?:  rendered = "int=\(v.value)"
+        case .enumValue(let v)?: rendered = "enum=\(v.enumValue.value)"
+        case nil:                rendered = "unset"
+        }
+
+        guard reportedLyricsFlags.insert("\(scope).\(name)=\(rendered)").inserted else { continue }
+        writeDebugLog("[Flags] lyrics flag — scope=\(scope) name=\(name) \(rendered)")
+    }
+}
+
+/// 替换是否**真的命中**了目标。`setBool` / `remove` 命中 0 条时是静默 no-op，
+/// 光看代码看不出来。这一行把"scope 猜错了"从"服务端就是这么下发的"里区分开。
+private func reportLyricsReplacementOutcome(_ values: [AssignedValue]) {
+    for replacement in propertyReplacements {
+        guard let name = replacement.name,
+              name.lowercased().contains("lyric") else { continue }
+
+        let scope = replacement.scope
+        let hits = values.filter {
+            $0.propertyID.name == name && (scope == nil || $0.propertyID.scope == scope)
+        }.count
+
+        let key = "\(scope ?? "*").\(name)"
+        guard reportedLyricsReplacements.insert(key).inserted else { continue }
+        writeDebugLog("[Flags] replacement \(key) — \(hits) match(es)")
+    }
+}
+
 private func modifyAssignedValues(_ values: inout [AssignedValue]) {
+    dumpLyricsFlags(values)
+
     for replacement in propertyReplacements {
         let matchingIndices = values.indices.filter({ index in
             let value = values[index]
@@ -457,6 +513,8 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
             }
         }
     }
+
+    reportLyricsReplacementOutcome(values)
 }
 
 private func modifyAttributes(_ attributes: inout [String: AccountAttribute]) {

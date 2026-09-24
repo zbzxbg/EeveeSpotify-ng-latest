@@ -74,6 +74,15 @@ enum SpotifyResponsePatcher {
     private static var _probeScrollBody: [Int: Data] = [:]
     private static var _probeScrollSeen: [String: Set<String>] = [:]
 
+    /// hex 报告。**用来修正上面那条推论的证据等级**：`no needle`（扫不到 "yric"）
+    /// **不能**当成"服务器没下发歌词元素"——
+    ///   · scrollsita 是 protobuf，元素类型极可能是**枚举整数**，字符串永远不会出现；
+    ///   · 实测 3 条 scrollsita（含 Spotify 有词的 SECRET 与没词的 最後の希望）都是
+    ///     `no needle`，body 里只有 artist/track/section/concert URI。
+    /// 所以额外把响应体前 512 字节按 hex 打出来（每 path 最多 3 次、只在体积变大时），
+    /// 让"两条响应到底差在哪个字段"可以离线比对，而不是只能比可打印字符串。
+    private static var _probeScrollHex: [String: (size: Int, reports: Int)] = [:]
+
     private static func printableRuns(_ d: Data, limit: Int) -> [String] {
         var runs: [String] = []
         var current = ""
@@ -132,14 +141,25 @@ enum SpotifyResponsePatcher {
         // ── scrollsita：累积整条响应体，报告新出现的关键字 ──
         var newlyMatched: [String] = []
         var printable: [String] = []
+        var hexDump: String?
         var bodySize = 0
         if isScrollsita {
             var body = _probeScrollBody[taskID] ?? Data()
             body.append(data)
             if body.count > 512 * 1024 { body = Data(body.suffix(512 * 1024)) }
             _probeScrollBody[taskID] = body
-            if _probeScrollBody.count > 32 { _probeScrollBody.removeAll() }
+            if _probeScrollBody.count > 32 {
+                _probeScrollBody.removeAll()
+                _probeScrollHex.removeAll()
+            }
             bodySize = body.count
+
+            // hex：同一 path 只在"体积变大"时报，最多 3 次（首块往往不完整）。
+            let previous = _probeScrollHex[url.path]
+            if previous?.size != body.count, (previous?.reports ?? 0) < 3 {
+                _probeScrollHex[url.path] = (body.count, (previous?.reports ?? 0) + 1)
+                hexDump = body.prefix(512).map { String(format: "%02x", $0) }.joined()
+            }
 
             for name in scrollNeedles where body.range(of: Data(name.utf8)) != nil {
                 if _probeScrollSeen[url.path, default: []].insert(name).inserted {
@@ -176,6 +196,12 @@ enum SpotifyResponsePatcher {
             writeDebugLog(
                 "[ScrollProbe] path=\(url.path) body=\(bodySize)B no needle —"
                     + " printable=\(printable.joined(separator: " | "))"
+            )
+        }
+        if let hexDump = hexDump {
+            writeDebugLog(
+                "[ScrollProbe] path=\(url.path) body=\(bodySize)B"
+                    + " hex\(hexDump.count / 2)B=\(hexDump)"
             )
         }
         if scanned % 500 == 0 {
