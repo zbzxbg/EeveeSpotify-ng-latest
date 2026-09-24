@@ -35,11 +35,6 @@ name: Build IPA (with Orion.framework)
 #      否则整个 job 失败 —— 让静默失败变成显式失败；
 #   5. 检查主程序有没有 `@executable_path/Frameworks` 这个 rpath，
 #      缺了就补上并重新签名（cyan 同样会静默失败的那一步）。
-#
-# ── 已知未验证项 ──────────────────────────────────────────────────────────
-# 这个文件是在没有 macOS/Theos 的环境下写的，逻辑对齐了已验证可用的
-# buildpatched.yml，但**没有实跑过**。第 5 步的 rpath 补丁是幂等的
-# （`if ! otool ... | grep -q`），最坏情况是那条 grep 的匹配行为需要微调。
 
 on:
   workflow_dispatch:
