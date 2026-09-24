@@ -306,10 +306,6 @@ func logPlayerTrackCandidates() {
     let metadataSelector = Selector(("metadata"))
     let uriSelector = Selector(("URI"))
 
-    for className in ["SPTPlayerTrackImplementation", "SPTPlayerTrack"] {
-        writeDebugLog("[TrackProbe] \(className) exists: \(NSClassFromString(className) != nil)")
-    }
-
     // 用 `objc_copyClassList`（不是 `objc_getClassList`）：
     //   · 它一次调用就返回"已注册类"缓冲区的**所有权**，签名干净
     //     （`objc_getClassList` 的缓冲区参数是 `AutoreleasingUnsafeMutablePointer<AnyClass>`，
@@ -326,28 +322,47 @@ func logPlayerTrackCandidates() {
 
     var candidates: [String] = []
     var scanned = 0
+    var classNames: [String] = []
+
+    // ⚠️ 上一次这个探针报 "SPTPlayerTrack exists: false"，**是探针自己错了**：
+    // `NSClassFromString("SPTPlayerTrack")` 找的是 **ObjC 类名**，而 Swift 类在运行时
+    // 是按 `_TtC…` 注册的，按 ObjC 名查必然查不到 —— 假阴性。
+    // 离线分析（Tools/eevee-hookfinder）已经证明 9.1.86 的 `__objc_classname` 表里
+    // **确实有 `SPTPlayerTrack` 和 `SPTPlayerTrack_NowPlaying`**。
+    //
+    // 正解是：遍历运行时类表，用 `class_getName` 拿 **ObjC 类名** 做**精确比对**。
+    // 注意不能用 `String(describing: cls)` —— 那给的是 `Module.Class` 形式，
+    // 与 ObjC 名不同（纯 Swift 类根本没有 ObjC 名）。
     for index in 0..<Int(classCount) {
         let cls: AnyClass = classList[index]
+        classNames.append(String(cString: class_getName(cls)))
+    }
 
-        // ① 先取名字（`class_getName` 不触发元数据 realize，代价最低），
-        //    名字不在白名单前缀里就直接跳过 —— 绝不碰它的方法表。
-        //
-        // ⚠️ 这个工具链里 `class_getName` 返回的是**非 Optional** 的
-        // `UnsafePointer<CChar>`（和 `Selector(_:)` 一样，跟 SDK 头里的
-        // "可为空"声明不一致），所以不能用 `guard let` 绑定 —— 编译器会直接报
-        // "条件绑定的值必须是 Optional"。保险起见只判空串。
-        let name = String(cString: class_getName(cls))
-        guard !name.isEmpty else { continue }
+    let exactNames = ["SPTPlayerTrack", "SPTPlayerTrack_NowPlaying"]
+    for wanted in exactNames {
+        writeDebugLog("[TrackProbe] exact \"\(wanted)\" in runtime class list: \(classNames.contains(wanted))")
+    }
+
+    for index in 0..<classNames.count {
+        let name = classNames[index]
+
+        // 名字里带 PlayerTrack 的全部报出来（这就是 targetName 的候选集合）
+        if name.contains("PlayerTrack") {
+            writeDebugLog("[TrackProbe] PlayerTrack-ish: \(name)")
+        }
+
+        // ① 先按名字筛，再碰方法表（安全 + 省事）。
         guard trackProbeNamePrefixes.contains(where: { name.hasPrefix($0) }) else {
             continue
         }
 
         scanned += 1
 
-        // ② 只对白名单里的类查方法。Swift 里嵌在类内部/闭包里的类型名字很长
-        //    （`_TtCFFC24...LyricsViewg9tableView...`），加一个长度上限，
+        // ② Swift 里嵌在类内部/闭包里的类型名字很长，加一个长度上限，
         //    它们都不是我们要找的 track 类。
         guard name.count <= 64 else { continue }
+
+        let cls: AnyClass = classList[index]
         guard class_getInstanceMethod(cls, metadataSelector) != nil,
               class_getInstanceMethod(cls, uriSelector) != nil else {
             continue
@@ -355,7 +370,7 @@ func logPlayerTrackCandidates() {
         candidates.append(name)
     }
 
-    writeDebugLog("[TrackProbe] scanned \(scanned) whitelisted class(es); \(candidates.count) expose metadata()+URI(): \(candidates.sorted().joined(separator: ", "))")
+    writeDebugLog("[TrackProbe] total \(classNames.count) classes; scanned \(scanned) whitelisted; \(candidates.count) expose metadata()+URI(): \(candidates.sorted().joined(separator: ", "))")
 }
 
 struct EeveeSpotify: Tweak {
