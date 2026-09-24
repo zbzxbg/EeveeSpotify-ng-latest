@@ -208,6 +208,7 @@ struct EeveeSettingsView: View {
                     }
                     .foregroundColor(.red)
                 }
+            }
             
             Section(footer: Text("reset_data_description".localized)) {
                 Button {
