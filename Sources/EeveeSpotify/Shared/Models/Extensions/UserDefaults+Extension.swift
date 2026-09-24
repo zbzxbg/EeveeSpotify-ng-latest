@@ -15,7 +15,6 @@ extension UserDefaults {
     private static let iconNamePrettifyKey = "iconNamePrettify"
     private static let cleanShareLinksKey = "cleanShareLinks"
     private static let enableLogRecordingKey = "enableLogRecording"
-    private static let forcedLyricsPayloadKey = "ngzhwm_forcedLyricsPayload"
 
     static var musixmatchToken: String {
         get {
@@ -114,30 +113,22 @@ extension UserDefaults {
         }
     }
 
-    /// **排障开关**：强制替换交出去的歌词 payload，用来把"payload 质量"与
-    /// "Spotify 侧门控"这两个变量分开。
-    ///
-    /// 取值：`""`（关，默认） / `"good"` / `"placeholder"`。
-    ///
-    /// 为什么要它：**歌词卡片**（与「关于艺人」并列那块）只有 MIMI 的 SECRET 会出现。
-    /// 它和失败曲目在 payload 上有两个可见差别 —— 行数（34 vs 3–7）与时间轴真假
-    /// （真实 vs 合成）。但"失败曲目 payload 差"和"Spotify 那边就没词"这两件事
-    /// 一直是绑在一起的，分不开。
-    ///
-    /// 这个开关把 payload 变成唯一自变量，**两个方向都要试**（只试一个方向会留下
-    /// "伪造的 payload 仍然不够好"这个死角）：
-    ///   · `good`        ← 给失败曲目喂 34 行**真实时间轴**；卡片出现 ⇒ payload 是关键
-    ///   · `placeholder` ← 给 SECRET 喂 3 行**无时间轴**；卡片消失 ⇒ payload 是关键
-    /// 两个方向都不动 ⇒ 门控在 Spotify 侧，payload 无关 ⇒ 转自绘兜底。
-    ///
-    /// 实现见 `CustomLyrics.x.swift` 的 `loadCustomLyricsForCurrentTrack`：它会**绕开**
-    /// 整条取词链和 `toSpotifyLyricsData`，所以「合成行级时间轴」开关对它无效。
-    static var forcedLyricsPayload: String {
-        get {
-            container.string(forKey: forcedLyricsPayloadKey) ?? ""
-        }
-        set {
-            container.set(newValue, forKey: forcedLyricsPayloadKey)
-        }
-    }
 }
+
+// 已移除：`forcedLyricsPayload` 排障开关（连同设置界面的 Picker 与
+// `CustomLyrics.x.swift` 里那处短路）。
+//
+// 移除原因：加入之后出现**稳定复现的启动崩溃**（EXC_BREAKPOINT/SIGTRAP，
+// `swift_unexpectedError`，崩在全局 userInitiated 队列上的一个 block 里，
+// 我们 dylib 有 4 帧未符号化；两份 .ips 的异常码同一地址 `0x19f2f6f54`）。
+// 它挡住了后续所有真机测试，所以先回退，事后再逐一排查。
+//
+// ⚠️ 但它**已经产出了本轮最重要的结论**，回退不要把结论一起丢掉：
+//   · 卡片（与「关于艺人」并列那块）上显示的 provider 是 `EeveeForce…`
+//     —— 也就是我们自己写死的名字 ⇒ **卡片是被我们注入的 payload 驱动的**。
+//     Spotify 侧的"这首歌有没有词"（`has_lyrics` / 服务端判定 / 本地状态）
+//     **不是门控**。
+//   · `timeSynchronized = false` 的 payload → **建卡片**；
+//     `timeSynchronized = true` → Spotify 走"同步歌词"表现（单行）而**不建卡片**。
+//     两个面看起来是**互斥**的。
+//   · 推论：「合成行级时间轴」默认开启，正是把卡片挤掉的那个东西。

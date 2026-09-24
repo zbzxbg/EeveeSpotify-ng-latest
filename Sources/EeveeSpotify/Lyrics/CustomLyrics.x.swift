@@ -13,63 +13,13 @@ private let geniusLyricsRepository = GeniusLyricsRepository()
 private let petitLyricsRepository = PetitLyricsRepository()
 private let amllTtmlLyricsRepository = AmllTtmlLyricsRepository.shared
 
-// MARK: - 排障：强制 payload（见 `UserDefaults.forcedLyricsPayload`）
-
-/// `forcedLyricsPayload == "good"` 时用的固定歌词：**34 行、真实时间轴**。
-///
-/// 数据取自日志 4/6 里 SECRET（MIMI / ヒミツ）那次 NetEase yrc 的真实行偏移
-/// （`[AppleMusicLyrics] L0 t=6.38 … L33 t=137.09`）。
-/// **刻意保留真实的不均匀分布，而不是均分** —— 要区分的正是"真实时间轴 vs 合成时间轴"。
-private let forcedGoodLines: [(offsetMs: Int, content: String)] = [
-    (6380, "Hito tsu mo shiranai yo"),
-    (8610, "Doushite sabishii riyuu dake"),
-    (11400, "Sore nara saigo wa kizukanai de ii no ?"),
-    (14650, "Soshi tara raku ni nareru no ?"),
-    (17490, "Nee nanni monai ya saishuu bin ga kyou da tte"),
-    (20270, "Hitori mauyou ni sekai wo tsuuka suru"),
-    (23270, "Tada shinjitetai no itsu ka wasou yatte"),
-    (26170, "Kimi to waraeru koto"),
-    (32120, "Yoru ni saku kotoba kyou ni naru"),
-    (34750, "Tada yume no mukou de madoromu you ni"),
-    (37940, "Gubbaisoushite gyu tte dakishimete iru no"),
-    (41660, "Utau nagisa no merodeii"),
-    (43640, "Ai ni ukabu koe hibiita sora"),
-    (46250, "Atashi ra iki wo suru no na n de ka na"),
-    (48750, "Daare mo shiranai himitsu wo oshiete misete"),
-    (53130, "Karappo no koko umete"),
-    (66370, "Hito tsu mo shiranai yo"),
-    (68610, "Nan'ni monai no ni namida dake"),
-    (71440, "Sore nara kyou ni te wo furu no kake dashite"),
-    (74660, "Samenaiyou touhi gyou"),
-    (77900, "Chippoke na n da atashi wa nan da tte"),
-    (80520, "Umaku tobenai choucho no habataki de"),
-    (83260, "De mo shinjitetai no itsu ka wasou yatte"),
-    (86170, "Kimi to waraeru koto"),
-    (106410, "Yoru ni saku kotoba kyou ni naru"),
-    (109040, "Tada yume no mukou de madoromu you ni"),
-    (112160, "Gubbaisoushite gyu tte dakishimete iru no"),
-    (116040, "Utau nagisa no merodeii"),
-    (117940, "Ai ni ukabu koe hibiita sora"),
-    (120540, "Atashi ra iki wo suru no na n de ka na"),
-    (123040, "Daare mo shiranai himitsu wo oshiete misete"),
-    (127340, "Karappo no koko umete"),
-    (135110, "Iki teku tada ikite yuku"),
-    (137090, "Dare mo shiranai himitsu wo oshiete misete"),
-]
-
-/// 把 `forcedGoodLines` 变成 DTO —— 供 `storeLyricsDto` 用。
-///
-/// 为什么要走 DTO：逐词 overlay 只有在 `currentLyricsDto` 有**行级**数据时才会去挂载，
-/// 而"卡片容器找到了没有"这条日志正是由那条路径打出来的。不喂 DTO 的话，排障实验会
-/// 丢掉唯一的机器可读判据，只剩肉眼观察。
-private func forcedGoodDto() -> LyricsDto {
-    LyricsDto(
-        lines: forcedGoodLines.map { LyricsLineDto(content: $0.content, offsetMs: $0.offsetMs) },
-        timeSynced: true,
-        romanization: .original,
-        languageCode: "ja"
-    )
-}
+// 已移除：`forcedGoodLines` / `forcedGoodDto()`（配合 `forcedLyricsPayload` 排障开关）。
+//
+// 保留结论、不留代码：那次实验证明了 **卡片（与「关于艺人」并列那块）是被我们注入的
+// payload 驱动的** —— 卡片底部显示的 provider 是 `EeveeForce…`，即我们自己写死的名字。
+// 且 `timeSynchronized = false` 会建卡片，`true` 则 Spotify 走单行表现而不建卡片。
+// 加入它之后出现稳定复现的启动崩溃，故整体回退；详见
+// `UserDefaults+Extension.swift` 末尾的说明。
 
 private func lyricsRepository(for source: LyricsSource) -> LyricsRepository {
     switch source {
@@ -145,55 +95,8 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         writeDebugLog("[Lyrics] Track duration unavailable — NetEase duration gate skipped")
     }
 
-    // ── 排障：强制 payload（见 `UserDefaults.forcedLyricsPayload`）──────────────
-    //
-    // **绕开**整条取词链与 `toSpotifyLyricsData`，直接造 protobuf ——
-    // 所以「合成行级时间轴」开关对它无效，payload 成为唯一自变量。
-    // 配色仍由调用方（`getLyricsDataForCurrentTrack`）照常处理，与正常路径一致。
-    switch UserDefaults.forcedLyricsPayload {
-    case "good":
-        writeDebugLog(
-            "[Lyrics] FORCED payload = good — \(forcedGoodLines.count) line(s), real timing"
-        )
-        lyricsState.loadedSuccessfully = true
-        lyricsState.isEmpty = false
-        // 喂 DTO 是为了让逐词 overlay 继续走，从而保留
-        // `[PreviewShell] card container …` 这条**机器可读**的判据（否则只剩肉眼）。
-        storeLyricsDto(forcedGoodDto(), source: .netease)
-        return Lyrics.with {
-            $0.data = LyricsData.with {
-                $0.timeSynchronized = true
-                $0.restriction = .unrestricted
-                $0.providedBy = "EeveeForceGood (EeveeSpotify)"
-                $0.lines = forcedGoodLines.map { line in
-                    LyricsLine.with {
-                        $0.content = line.content
-                        $0.offsetMs = Int32(line.offsetMs)
-                    }
-                }
-            }
-        }
-
-    case "placeholder":
-        writeDebugLog("[Lyrics] FORCED payload = placeholder — 3 line(s), no timing")
-        lyricsState.loadedSuccessfully = true
-        lyricsState.isEmpty = false
-        return Lyrics.with {
-            $0.data = LyricsData.with {
-                $0.timeSynchronized = false
-                $0.restriction = .unrestricted
-                $0.providedBy = "EeveeForcePlaceholder (EeveeSpotify)"
-                $0.lines = [
-                    LyricsLine.with { $0.content = "song_is_instrumental".localized; $0.offsetMs = 0 },
-                    LyricsLine.with { $0.content = "let_the_music_play".localized; $0.offsetMs = 0 },
-                    LyricsLine.with { $0.content = ""; $0.offsetMs = 0 },
-                ]
-            }
-        }
-
-    default:
-        break
-    }
+    // 已移除：`forcedLyricsPayload` 排障短路（连同它用的 `forcedGoodLines`）。
+    // 加入之后出现稳定复现的启动崩溃，见 `UserDefaults+Extension.swift` 末尾的说明。
 
     // lyricsSource == .multiLevel -> 固定顺序多级回退（并发 + 超时）
     // 其它来源 -> 用户选择的单一源 + 可选 Genius 回退
