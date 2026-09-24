@@ -56,6 +56,42 @@ enum SpotifyResponsePatcher {
     /// 如果连播放器状态类的端点都没扫到，就不能下"不在线上"的结论。
     private static var _probeSeenPaths = Set<String>()
 
+    // MARK: `scrollsita` 专用：服务器下发的"正在播放页元素列表"
+
+    /// 要验证的推论：**"歌词卡片"这个元素，是不是服务器决定放不放的。**
+    ///
+    /// `scrollsita/v1/scroll/spotify:track:<id>` 是按曲目返回**正在播放页元素**的接口。
+    /// 若推论成立，SECRET（Spotify 有词）的响应里会出现歌词相关元素，
+    /// 而最後の希望（Spotify 没词）的不会 —— 一发就能把判据钉在服务器侧，
+    /// 也就能给"本地无解、只剩自绘"下最终结论。
+    ///
+    /// 实现要点：
+    ///   · **累积整条响应体**（chunk 会切碎，只看单块必然漏），512KB 封顶兜底；
+    ///   · 关键字用 `yric`，一次覆盖 Lyric / lyric / Lyrics / lyrics（线上用哪种大小写未知）；
+    ///   · 同一 path 每发现一个**新**关键字才报一次，不刷屏；
+    ///   · 一个关键字都没命中也把**可打印字符串**前 25 条打出来 —— 否则"没命中"和
+    ///     "这个接口根本不含字符串"分不清，又是一次白跑（日志 10 的教训）。
+    private static var _probeScrollBody: [Int: Data] = [:]
+    private static var _probeScrollSeen: [String: Set<String>] = [:]
+
+    private static func printableRuns(_ d: Data, limit: Int) -> [String] {
+        var runs: [String] = []
+        var current = ""
+        for byte in d {
+            if byte >= 0x20 && byte < 0x7F {
+                current.append(Character(UnicodeScalar(byte)))
+            } else {
+                if current.count >= 5 {
+                    runs.append(current)
+                    if runs.count >= limit { return runs }
+                }
+                current = ""
+            }
+        }
+        if current.count >= 5 && runs.count < limit { runs.append(current) }
+        return runs
+    }
+
     static func probeHasLyricsKey(url: URL, taskID: Int, data: Data) {
         guard !data.isEmpty else { return }
 
@@ -63,6 +99,9 @@ enum SpotifyResponsePatcher {
         // 服务端 JSON / protobuf 都可能用 `hasLyrics`。
         let needles = ["has_lyrics", "hasLyrics"].compactMap { $0.data(using: .ascii) }
         guard !needles.isEmpty else { return }
+
+        let isScrollsita = url.path.contains("/scrollsita/")
+        let scrollNeedles = isScrollsita ? ["yric", "lement", "ard"] : []
 
         lock.lock()
         let carry = _probeCarry[taskID] ?? Data()
@@ -89,6 +128,30 @@ enum SpotifyResponsePatcher {
         let isNewHit = hit && _probeReportedPaths.insert(url.path).inserted
         let hitCount = _probeReportedPaths.count
         let scanned = _probeScanned
+
+        // ── scrollsita：累积整条响应体，报告新出现的关键字 ──
+        var newlyMatched: [String] = []
+        var printable: [String] = []
+        var bodySize = 0
+        if isScrollsita {
+            var body = _probeScrollBody[taskID] ?? Data()
+            body.append(data)
+            if body.count > 512 * 1024 { body = Data(body.suffix(512 * 1024)) }
+            _probeScrollBody[taskID] = body
+            if _probeScrollBody.count > 32 { _probeScrollBody.removeAll() }
+            bodySize = body.count
+
+            for name in scrollNeedles where body.range(of: Data(name.utf8)) != nil {
+                if _probeScrollSeen[url.path, default: []].insert(name).inserted {
+                    newlyMatched.append(name)
+                }
+            }
+            // 一条关键字都没有时，先把可打印字符串亮出来，避免"看不到就等于没有"。
+            if newlyMatched.isEmpty, _probeScrollSeen[url.path] == nil {
+                printable = printableRuns(body, limit: 25)
+                if !printable.isEmpty { _probeScrollSeen[url.path] = ["<no-needle>"] }
+            }
+        }
         lock.unlock()
 
         if announce {
@@ -101,6 +164,18 @@ enum SpotifyResponsePatcher {
             writeDebugLog(
                 "[HasLyricsProbe] HIT — host=\(url.host ?? "?") path=\(url.path)"
                     + " chunk=\(data.count)B"
+            )
+        }
+        if !newlyMatched.isEmpty {
+            writeDebugLog(
+                "[ScrollProbe] path=\(url.path) body=\(bodySize)B"
+                    + " matched=\(newlyMatched.joined(separator: ","))"
+            )
+        }
+        if !printable.isEmpty {
+            writeDebugLog(
+                "[ScrollProbe] path=\(url.path) body=\(bodySize)B no needle —"
+                    + " printable=\(printable.joined(separator: " | "))"
             )
         }
         if scanned % 500 == 0 {
