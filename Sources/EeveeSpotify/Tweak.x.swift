@@ -331,8 +331,13 @@ func logPlayerTrackCandidates() {
 
         // ① 先取名字（`class_getName` 不触发元数据 realize，代价最低），
         //    名字不在白名单前缀里就直接跳过 —— 绝不碰它的方法表。
-        guard let namePointer = class_getName(cls) else { continue }
-        let name = String(cString: namePointer)
+        //
+        // ⚠️ 这个工具链里 `class_getName` 返回的是**非 Optional** 的
+        // `UnsafePointer<CChar>`（和 `Selector(_:)` 一样，跟 SDK 头里的
+        // "可为空"声明不一致），所以不能用 `guard let` 绑定 —— 编译器会直接报
+        // "条件绑定的值必须是 Optional"。保险起见只判空串。
+        let name = String(cString: class_getName(cls))
+        guard !name.isEmpty else { continue }
         guard trackProbeNamePrefixes.contains(where: { name.hasPrefix($0) }) else {
             continue
         }
