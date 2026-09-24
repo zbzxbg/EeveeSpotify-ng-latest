@@ -397,6 +397,23 @@ struct EeveeSpotify: Tweak {
             writeDebugLog("[INIT] All \(hookTargets.count) hook targets verified")
         }
 
+        // `SPTPlayerTrackHook`（见 `CustomLyrics+AllTracksLyrics.x.swift`）在 9.1.x 上挂的是
+        // `SPTPlayerTrack`，并在它的 `metadata()` 里写 `has_lyrics = "true"`。
+        //
+        // 这条覆写若没绑上，客户端就只能听 Spotify 服务端的判定 —— 结果是"Spotify 没词的歌"
+        // 连**面 B**（与「关于艺人」并列的「歌词」预览卡片）都不建，而**面 A**（封面与歌名
+        // 之间的单行歌词）却能正常显示我们注入的歌词（实测：纯音乐 / 未找到歌词都会出现）。
+        //
+        // 上面那个 6 项的 hookTargets 列表里没有它，所以它历史上从未被验证过。这里补一条，
+        // **纯日志、不改行为**：metadata=false 就说明覆写必然无效，不用再去猜。
+        if let trackCls = NSClassFromString("SPTPlayerTrack") {
+            let hasMetadata = class_getInstanceMethod(trackCls, Selector(("metadata"))) != nil
+            let hasURI = class_getInstanceMethod(trackCls, Selector(("URI"))) != nil
+            writeDebugLog("[INIT] SPTPlayerTrack: metadata=\(hasMetadata) URI=\(hasURI)")
+        } else {
+            writeDebugLog("[INIT] MISSING SPTPlayerTrack — has_lyrics 覆写必然无效")
+        }
+
         // For 9.1.x, activate premium patching and lyrics
         if EeveeSpotify.hookTarget == .v91 {
 

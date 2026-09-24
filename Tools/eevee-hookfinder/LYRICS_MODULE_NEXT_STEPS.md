@@ -1,153 +1,162 @@
-# 歌词模块不展示：真因已定位（三组实测日志）
+# 歌词模块：面 A 已修复，面 B 待攻（含实测日志清单）
 
-**状态**：两个独立问题的机制**均已定位**；其中问题 B 的修复代码**已存在于工作区但从未提交/编译/验证**。
-**数据来源**：`C:\dsh\readlog\eeveespotify_debug.log`、`... 2 (2).log`、`... 3.log`（2026-09-24）。
+**数据**：`C:\dsh\readlog\eeveespotify_debug{ 2 (2), 3, 4, 5, 6, 7}.log`（2026-09-24）
 
 ---
 
 ## 0. 结论（先看这里）
 
-**这不是一个问题，是两个。**
+**Spotify 有两个独立的"歌词面"，必须分开谈。**
 
-| | 问题 A：响应被按住 | 问题 B：模块不出现 |
+| | 面 A：单行歌词 | 面 B：歌词预览卡片（**目标**） |
 |---|---|---|
-| 现象 | 整页模块**一起延迟**出现 | 这首歌**完全没有**歌词模块 |
-| 触发条件 | 取词链耗时长（AMLL TLS 重试 ~11 秒） | payload **没有时间轴**（`timeSynchronized = false`，每行 `offsetMs = 0`） |
-| 实测 | 日志 1/2：请求 → 占位，**14 秒** | 日志 3：响应 **~1 秒**，payload 已注入，**模块照样不出现** |
-| 缓解 | 关掉「AMLL 优先」→ 实测降到 ~1 秒 | **合成行级时间轴**（代码已存在，未提交） |
+| 位置 | 封面与歌名**之间** | 与**「关于艺人」并列** |
+| 类名 | `Lyrics_TextComponentImpl.LyricsView` | `Lyrics_CardElementImpl.CardView` |
+| 判据 | **数据驱动**：有可用的歌词 payload 就建 | **另有门控**（见第 3 节） |
+| 现状 | ✅ **已修复**（合成时间轴，干净 A/B 证实） | ❌ **仍未解决** |
 
-**关键**：关掉 AMLL 之后延迟问题解决了，**模块问题一点没动**。
-所以问题 B 才是"有些歌不展示歌词模块"的正主，而它的修复**从来没被测过**。
-
-**门控假说：结案。** 日志 3 里播放 3 首，**3 首全部有歌词请求**，每首还请求了两次。
-
----
-
-## 1. 日志 3 的证据（「AMLL 优先」已关闭，旧构建）
-
-| 曲目 | NetEase 结果 | 时间轴 | 耗时 | 模块 |
-|---|---|---|---|---|
-| `5utfun3R35e5AsBalPSxBe`「最後の希望」 | 若无词 → **Unsynced lyrics fallback（7 行）** | ❌ 全 nil | ~1s | 无 |
-| `4EYOrgyfbSGus6sPyAiY6f`「Jersey」 | **Instrumental — returning empty lyrics** → 占位 3 行 | ❌ 全 nil | ~1s | 无 |
-| `0GieVByHRrOdpA6U8SFl1J`「BAILA CONMIGO」 | No usable lyrics → **serving our placeholder** | ❌ 全 nil | ~1s | 无 |
-
-三首走的是**三条完全不同的代码路径**（无时间轴歌词 / 纯音乐占位 / 取词失败占位），
-但**唯一共同点**就是：`timeSynchronized = false` 且每行 `offsetMs = 0`。
-
-**这是目前最强的证据**：三条互不相关的失败路径，收敛到同一个 payload 特征。
-
-### 与日志 1/2 的对照
-
-日志 1/2 里「AMLL 优先」是开的，失败样本（Bridge Between Us）：
-请求 08:47:15 → 占位 08:47:29，**14 秒**，其中 11 秒是 `api.amll.dev` TLS 重试
-（`-1200 / -9816`，`interface: utun5`，两次握手超时，退避仅 0.5 秒）。
-
-→ 那一组暴露的是**问题 A**；日志 3 关掉 AMLL 后，**问题 A 消失、问题 B 显形**。
+- **面 A 修好了。** 关掉合成时间轴 → 面 A 三首全无；打开 → 三首全有
+  （内容分别是可滚动歌词 / 纯音乐 / 未找到歌词，**全部来自我们注入的 payload**）。
+- **面 B 依然是"有些歌完全没有"的元凶。** 它不受合成时间轴影响。
+- 关键推论：**注入通路本身完全正常**——面 A 能渲染出我们写的"纯音乐"、"未找到歌词"，
+  说明 payload 被 Spotify 正常接收解析。面 B 缺的是**另一个开关**。
 
 ---
 
-## 2. 代码证据
+## 1. 日志清单（务必按版本区分，之前踩过坑）
 
-**NetEase 的无时间轴分支**（`NeteaseLyricsRepository.swift:926-934`）：
+| 日志 | Spotify | 条件 | 备注 |
+|---|---|---|---|
+| 1 | 9.1.86 | AMLL 优先开 | 14 秒阻塞样本 |
+| 2 | 9.1.86 | AMLL 优先开 | |
+| 3 | 9.1.86 | AMLL 优先**关**，旧构建 | 三首**有**请求 |
+| 4 | **9.1.6** | 合成开 | 三首**无**请求 |
+| 5 | **9.1.6** | 合成关 | 三首**无**请求 |
+| 6 | 9.1.86 | 合成**开** | 有效 A/B ✅ |
+| 7 | 9.1.86 | 合成**关** | 有效 A/B ✅ |
 
-```swift
-fallbackLines.append(LyricsLineDto(content: content, offsetMs: nil))   // 每行 nil
-...
-timeSynced = false
-writeDebugLog("[NetEase] Unsynced lyrics fallback (\(lines.count) line(s))")
+> ⚠️ **日志 3 vs 4/5 不是有效 A/B** —— Spotify 版本不同（9.1.86 vs 9.1.6）。
+> 版本由 `build-ipa-with-orion.yml` 的 `ipa_url` 输入决定，工作流**不下载也不校验** Spotify。
+> 建议加 `expected_spot_version` 断言，避免再次静默换版本。
+
+---
+
+## 2. 面 A：已修复（实测 A/B）
+
+**Jersey（纯音乐占位）**这一首最干净：
+
+| | 日志 6（合成 **开**） | 日志 7（合成 **关**） |
+|---|---|---|
+| 注入 payload | 3 行占位 + **合成时间轴** | 3 行占位，无时间轴 |
+| 日志 | `synthetic line timing applied — 3 line(s), duration=150000ms, lastOffset=112500ms` | （无） |
+| **面 A** | ✅ `inline host found: Lyrics_TextComponentImpl.LyricsView` | ❌ `inline host not found` |
+| 肉眼 | 显示**纯音乐** | 什么都不显示 |
+
+**用户确认**：合成关时，除对照组外三首**均未展示面 A**；合成开时三首**都展示**
+（可滚动歌词 / 纯音乐 / 未找到歌词）。
+
+→ 取证报告证据 4 的"无时间轴 → 判为不可用"**由此证实**（在面 A 上）。
+
+**实现位置**：`LyricsDto.toSpotifyLyricsData` 的 `SynthesizesTiming` 分支 +
+`SyntheticLyricTiming.applying`；设置项「合成行级时间轴」控制，可在设置里 A/B。
+
+---
+
+## 3. 面 B：未解决，两个候选假说
+
+同一会话（日志 6）里：**SECRET 面 B 出现，另外三首都不出现。**
+
+| | 假说 | 支持 | 反证 |
+|---|---|---|---|
+| **H1** | 面 B 由 track 元数据 **`has_lyrics`** 决定（Spotify 服务端判定这首歌有没有词） | 与"SECRET 有 / 三首没有"完全对应；`has_lyrics` 确为真实元数据键 | 暂无 |
+| **H2** | 面 B 要求**真同步**歌词，合成时间轴不算 | SECRET 是 34 行真 yrc | 7 行那首也是真歌词 + 合成轴，仍不出面 B |
+
+**倾向 H1。** `SPTPlayerTrackHook`（`CustomLyrics+AllTracksLyrics.x.swift`）就是为强行把
+`has_lyrics` 写成 `"true"` 而存在的，但：
+
+- `Tweak.x.swift` 的启动校验列表（6 项，全是鉴权类）里**没有** `SPTPlayerTrack`，
+  所以这条覆写**历史上从未被验证过**；
+- 取证报告的二进制分析（证据 5）认为 9.1.x 上 `metadata()` 选择器可能不存在。
+
+**若 H1 成立**，正主就是这条覆写的绑定，与 payload 形状无关。
+
+---
+
+## 4. 版本差异：9.1.6 上"零请求"
+
+| 版本 | 三首冷门曲目是否有 `color-lyrics/v2` 请求 |
+|---|---|
+| 9.1.86 | **有**（日志 3、6、7） |
+| 9.1.6 | **无**（日志 4、5，只有 `watch-feed` / `merch-npv`） |
+
+→ "请求门控"是 **9.1.6 特有**的，9.1.86 上不存在。**该线索可以归档**，
+不要再拿 9.1.86 的日志去讨论门控。
+
+---
+
+## 5. 本轮新增的两处诊断（纯日志，不改行为）
+
+**① 逐首 dump `has_lyrics`** — `Lyrics/LyricsBackdropArtworkView.swift:47-64`
+
+原来用 `didLogMetadataDump` **只 dump 一次**，打到的永远是碰巧第一首
+（三份日志恰好都是 SECRET），拿不到"有词 / 没词"的对照。现在改成**换歌就打**：
+
+```
+[Artwork] has_lyrics=<值> track=<id> keys=[...]
 ```
 
-**旧构建的 `toSpotifyLyricsData`** 直接 `$0.timeSynchronized = timeSynced`，
-行 offset 取 `line.offsetMs ?? 0` → 整份 payload 无时间轴。
+**② 验证 `SPTPlayerTrack` 覆写能否绑上** — `Tweak.x.swift:400-415`
 
-> ⚠️ **一句会骗人的日志**：`NeteaseLyricsRepository.swift:1030` 的
-> `[NetEase] Synced lyrics — N line(s)` 是**无条件打印**的，`timeSynced = false` 时也照打。
-> 所以日志里会同时出现 "Unsynced lyrics fallback" 和 "Synced lyrics"。
-> 判断有没有时间轴**不要看这一行**，看有没有 `Unsynced lyrics fallback` /
-> `synthetic line timing applied`。
+```
+[INIT] SPTPlayerTrack: metadata=<bool> URI=<bool>
+[INIT] MISSING SPTPlayerTrack — has_lyrics 覆写必然无效
+```
 
-> ⚠️ **另一个确认**：`synthetic line timing` 在**全部三份日志里一次都没出现** →
-> 被测构建不含 `SyntheticLyricTiming`（与你说的"那些更改没提交测试"一致）。
+**判读**：三首 `has_lyrics=false/nil` + SECRET `true` → H1 成立；
+`metadata=false` → 直接确认覆写绑不上，不必再猜。
 
----
-
-## 3. 下一步：只有一件事
-
-**把工作区里那份未提交的改动编译出来，用同样这三首歌复测。**
-
-理由：问题 B 的修复就是它，而它从未编译、从未上机。
-
-**复测判据（三条都要看）**：
-
-1. 日志里出现 `[Lyrics] synthetic line timing applied — N line(s), duration=...ms, lastOffset=...ms`；
-2. 同样的三首歌，**歌词模块出现**（最差显示"未找到歌词"）；
-3. 已经关闭的「AMLL 优先」**保持关闭**（问题 A 的缓解别退回去）。
-
-**如果复测后模块仍不出现** → 说明"无时间轴 → 不建模块"这条仍然只是相关性，
-那时再回到 payload 之外去找（Swift 层门控 / 服务端实验），并考虑第 5 节的兜底方案。
+> ⚠️ 取日志必须**先开日志记录 → 杀掉 Spotify → 重开**，
+> 否则拿不到 `[INIT]` 段（日志 4/5 就缺这一段）。
 
 ---
 
-## 4. 之后要做的（按收益排序）
+## 6. 其他已查明 / 已修正
 
-1. **去掉 `didCompleteWithError` 里的同步等待**（`DataLoaderServiceHooks.x.swift`）
-   —— 先立刻答缓存/占位，后台再取。问题 A 的根治。
-2. **回退链快速失败**：对"网络层不通"类错误（TLS/超时）不要重试，
-   AMLL 那种两次握手各 5 秒、退避 0.5 秒的设计纯属浪费。
-3. **预取 + 缓存**：把网络请求移出响应路径（当前完全没有预取）。
-4. **自绘兜底**（纵深防御）：把预览层的锚点从"歌词卡片容器"放宽到"正在播放页"，
-   仅在检测不到卡片时启用。能力已存在（`AppleMusicLyricsOverlay` / `PreviewShell`），
-   现在被 `card == nil → 拒绝挂载` 主动关掉了（`LyricsWordByWord.x.swift:1697-1709`）。
-
----
-
-## 5. 仍未被解释 / 不能排除的
-
-- ⚠️ **"无时间轴 → Spotify 不建模块"依然是相关性，不是已证事实**。
-  日志 3 给出了 3/3 的一致证据，但没有判定性实验。
-  **第 3 节的复测就是这个实验**：如果补上时间轴后模块出现，假设成立；否则推翻。
-- ⚠️ **门控假说未穷尽排除**，但已无任何支持证据：日志 3 的 3/3 全部有请求。
-  此前怀疑的 `7dUKNjRiLxS2OXRldCIjH4`（日志 2 开头，无请求）更像是日志窗口边界产物。
-- ⚠️ 每首歌被请求**两次**（间隔约 1 秒），原因未查明。
-  第二次总是命中缓存，所以不是性能问题，但可能说明有两个消费者（卡片 / 全屏）。
+- **"每首歌请求两次"已解开**：第二次的 URL 多带 **`vocalRemoval=true`**
+  （`…/color-lyrics/v2/track/<id>?clientLanguage=zh&vocalRemoval=true`）。
+  日志只打 `url.path`，把 query 吃掉了才显得一样。第二次总命中缓存，非性能问题。
+- **AMLL 优先务必保持关闭**：日志 1/2 里 `api.amll.dev` TLS 失败 ×2 = **11 秒**纯浪费，
+  导致响应被按住 **14 秒**。关掉后降到 ~1 秒。**问题独立于面 A/面 B，但同样真实。**
+- ❌ 作废：**"延迟是模块不出现的（唯一）主因"** —— 关掉 AMLL 后延迟正常，模块依旧不出现。
+- ❌ 作废：**门控假说**（曾列为"权重最高"）—— 在 9.1.86 上不成立；仅 9.1.6 观察到。
+- ❌ 作废：**"日志 3 vs 4/5 说明我们的构建引入了门控回归"** —— 版本不同，对照无效。
+- ❌ 笔误：`LYRICS_MODULE_FINDINGS.md` 里的 ID `1GS3H8cVOmaTDM32X35GGu` 应为
+  `1GS3H8cVOmaTDM32X35GQu`（结尾 **u**）。
 
 ---
 
-## 6. 已作废 / 修正的结论
+## 7. 代码改动记录
 
-- ❌ **"延迟是主因"**（本文上一版）—— 修正为"问题 A，独立且已缓解；
-  模块不出现是问题 B"。关掉 AMLL 后延迟正常而模块依旧不出现，是决定性反例。
-- ❌ **门控假说**（更早版本列为"权重最高"）—— 结案，见第 0 节。
-- ❌ `LYRICS_MODULE_FINDINGS.md` 里的歌曲 ID `1GS3H8cVOmaTDM32X35GGu` 是**笔误**，
-  实际为 `1GS3H8cVOmaTDM32X35GQu`（结尾 **u**）。检索请用带 u 的 ID。
-- ⚠️ `LYRICS_MODULE_FINDINGS.md` 证据 4 的"无时间轴 → 模块不出现"**现在有了较强支持**，
-  但仍需第 3 节的复测来定论。
+**A. 移除运行时类名探针**（`Tweak.x.swift`）
+`eeveeTrackProbeEnabled` / `schedulePlayerTrackProbeIfEnabled` / `logPlayerTrackCandidates`
+整段删除。前两条是**致命编译错误**：重复声明 `struct EeveeSpotify: Tweak`，
+以及引用已不存在的 `trackProbeNamePrefixes`（早先 `strip_probe_block.py` 误删了定义留下引用）。
+同步移除 `UserDefaults.enableTrackProbe`、设置界面开关、`en`/`zh-CN` 两条文案。
 
----
+**B. 本轮新增诊断** —— 见第 5 节。
 
-## 7. 本轮代码改动：移除运行时类名探针
+**C. 两次括号事故（均已修复，教训记下）**
+删探针 Toggle 时多删了 `Section` 的闭括号；`Tweak.x.swift` 删调用点时多删了一个 `}`。
+**在没有编译器的会话里改括号密集区域，必须逐处复核**——`edit` 只做字面替换，不校验结构。
 
-`Sources/EeveeSpotify/Tweak.x.swift` 里的运行时探针
-（`eeveeTrackProbeEnabled` / `schedulePlayerTrackProbeIfEnabled` / `logPlayerTrackCandidates`）
-已整段删除。前两条是**致命编译错误**：
-
-1. 重复声明了 `struct EeveeSpotify: Tweak`（原文同时存在两处）；
-2. 引用了**已不存在**的 `trackProbeNamePrefixes` —— 早先 `strip_probe_block.py`
-   那次"误伤"删掉了定义、留下了引用；
-3. 它连续两次造成启动崩溃（EXC_BREAKPOINT/SIGTRAP，见 `Tweak.x.swift:239-257` 留存的说明）。
-
-同步移除支撑代码：`UserDefaults.enableTrackProbe`（含 key）、设置界面开关、
-`en` / `zh-CN` 两条本地化文案。
-
-> ⚠️ **本次改动未经编译验证**：会话内 shell 执行器故障（`0xC0000142`），无法 `swift build`。
-> 改动全部是删除，已用 grep 确认无残留引用，括号平衡已人工核对，但仍需一次真实构建确认。
+> ⚠️ **以上改动均未经编译验证**（会话内 shell 执行器故障 `0xC0000142`）。
+> 需要一次真实构建确认。
 
 ---
 
-## 8. `Tools/eevee-hookfinder/` 脚本：现在不需要跑
+## 8. `Tools/eevee-hookfinder/` 脚本
 
-门控假说已结案，这些脚本（`find_player_track_class.py`、`extract_player_track_class.py`、
-`audit_lyrics_gate.py`、`find_lyrics_gate.py`）回答的都是"门控在哪"，**当前没有目标**。
-留着备查；运行它们需要 `C:\dsh\ipa\` 下那份 9.1.86 解密 IPA（仍在）。
-
-`strip_probe_block.py` 任务已完成，**可以删**。
+门控假说在 9.1.86 上已不成立，这些脚本当前没有目标，**先不跑**，留着备查
+（`find_player_track_class.py`、`extract_player_track_class.py`、
+`audit_lyrics_gate.py`、`find_lyrics_gate.py`）。运行需要 `C:\dsh\ipa\` 下那份
+9.1.86 解密 IPA（仍在）。`strip_probe_block.py` 任务已完成，可删。
