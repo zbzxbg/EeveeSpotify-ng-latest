@@ -35,8 +35,7 @@ enum LyricsArtworkResolver {
 
     private static let stateQueue = DispatchQueue(label: "com.eevee.lyrics.artwork")
     private static var lastResolved: (trackKey: String, url: URL)?
-    /// 上一次 dump 过元数据的曲目 —— 换歌才 dump，避免刷屏，同时能看到每首歌的 `has_lyrics`。
-    private static var lastMetadataDumpTrack = ""
+    private static var didLogMetadataDump = false
 
     static func artworkURL(for track: SPTPlayerTrack?) -> URL? {
         guard let track else { return nil }
@@ -44,23 +43,15 @@ enum LyricsArtworkResolver {
         let metadata = track.metadata()
         let trackKey = track.trackIdentifier
 
-        // ── 逐首 dump `has_lyrics` ────────────────────────────────────────────
-        //
-        // 为什么不能只 dump 一次：**面 A**（封面与歌名之间的单行歌词）与 **面 B**
-        // （与「关于艺人」并列的「歌词」预览卡片）是两个**独立的渲染面**。实测同一会话里
-        // SECRET 面 B 出现、其它歌不出现，而面 A 三首都出现（内容分别是可滚动歌词 /
-        // 纯音乐 / 未找到歌词，都来自我们注入的 payload）。
-        //
-        // 怀疑面 B 的开关是 track 元数据里的 `has_lyrics` —— Spotify 服务端对"这首歌有没有
-        // 歌词"的判定，而 `SPTPlayerTrackHook` 那个 `has_lyrics = "true"` 覆写在 9.1.x 上
-        // 可能根本没绑上。只 dump 一次的话，打到的永远是碰巧第一首（三份日志恰好都是 SECRET），
-        // 拿不到"有词 / 没词"的对照，所以改成换歌就打。
-        if lastMetadataDumpTrack != trackKey {
-            lastMetadataDumpTrack = trackKey
-            writeDebugLog(
-                "[Artwork] has_lyrics=\(metadata["has_lyrics"] ?? "<nil>") track=\(trackKey)"
-                    + " keys=\(metadata.keys.sorted())"
-            )
+        if !didLogMetadataDump {
+            didLogMetadataDump = true
+            // 只有第一次 dump，避免刷屏；对不上的时候照这行日志调 urlKeys 就行。
+            //
+            // ⚠️ 这里读到的 `has_lyrics` 是**被 `SPTPlayerTrackHook` 改写之后**的值
+            // （覆写生效的话永远是 "true"），**不能**用来判断 Spotify 的原始判定。
+            // 要看原始值请查 `[TrackHook] metadata() called — original has_lyrics=…`
+            // （在 `CustomLyrics+AllTracksLyrics.x.swift` 的覆写里，改写之前打印）。
+            writeDebugLog("[Artwork] metadata keys: \(metadata.keys.sorted())")
         }
 
         if let url = urlFromMetadata(metadata) {

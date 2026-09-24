@@ -3,6 +3,11 @@ import UIKit
 
 private var shouldOverrideLocalTrackURI = false
 
+/// 上一次打过 `[TrackHook]` 日志的曲目 —— 换歌才打。
+///
+/// `metadata()` 会被高频调用（封面解析、播放状态刷新都会走），不设这道闸门会刷屏。
+private var lastTrackHookLoggedURI = ""
+
 class SPTPlayerTrackHook: ClassHook<NSObject> {
     typealias Group = BaseLyricsGroup
     static let targetName = EeveeSpotify.hookTarget == .latest
@@ -11,6 +16,29 @@ class SPTPlayerTrackHook: ClassHook<NSObject> {
 
     func metadata() -> [String: String] {
         var meta = orig.metadata()
+
+        // ── 诊断：这条覆写到底有没有被调用，以及 Spotify 给的**原始**值是多少 ──
+        //
+        // 为什么必须打在这里：`[Artwork] has_lyrics=` 那处（`LyricsBackdropArtworkView`）
+        // 只走 Apple Music 预览层的封面解析，而那条路**要求面 B 已经存在** —— 于是
+        // "面 B 没出现的歌"永远打不出它们的值（日志 8 里全日志只有 SECRET 一条，白测了）。
+        //
+        // 而这个方法**每首歌都会被调用**，并且能拿到我们改写**之前**的值 —— 正是需要
+        // 对照的那个数。
+        //
+        // 判读：
+        //   · 三首打出 `has_lyrics=false`/`<nil>`、SECRET 打出 `true` → 面 B 的门控就是它；
+        //   · 这里**一行都没有** → 覆写压根没被调用（尽管类和方法表都存在）；
+        //   · 四首全是 `true` → 覆写生效了，那 `has_lyrics` 就**不是**面 B 的判据。
+        let uri = meta["entity_uri"] ?? "?"
+        if uri != lastTrackHookLoggedURI {
+            lastTrackHookLoggedURI = uri
+            writeDebugLog(
+                "[TrackHook] metadata() called — original has_lyrics="
+                    + "\(meta["has_lyrics"] ?? "<nil>") uri=\(uri)"
+            )
+        }
+
         meta["has_lyrics"] = NgzhwmSettingsViewModel.isLyricsFeatureDisabled ? "false" : "true"
         return meta
     }
