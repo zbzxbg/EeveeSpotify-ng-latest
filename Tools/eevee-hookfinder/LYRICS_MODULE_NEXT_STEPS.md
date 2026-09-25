@@ -390,7 +390,48 @@ payload 切换任何东西 ⇒ 服务器决定卡片这条假设可以判死"。
 
 ---
 
-## 11. 历史遗留（原 §9，位置随 §10 追加而后移）
+## 12. 第三轮：剩下的黑块来自**占位 payload** 那条路（日志 21 + 照片 09:09）
+
+**现象**：日志 21 / 照片 09:09（`NIGHT VIBE`）里仍有一批曲目的卡片与全屏**纯黑**。
+
+**定位**：按"日志里有没有 `keeping synthesized background opaque`"分组，一刀切开：
+
+| 组 | 曲目 | 状态 |
+|---|---|---|
+| 有该日志行 | `bye bitch!`、`LOVE POTION`（NetEase 给了 synced lyrics） | §10 的修复**生效** ✔ |
+| 无该日志行 | `FLUXXWAVE`、`Montagem Digital 3`、`Montagem Digital`、`MONTAGEM HITORI`、`NIGHT VIBE` | 仍然纯黑 |
+
+第二组全都紧跟着 `[NetEase] No usable lyrics` → `[Lyrics] official lyrics hidden — serving our placeholder`
+—— 它们走的是**占位 payload** 这条完全不同的路，压根没经过 §10 修的那段代码。
+
+**根因**：占位 payload 由 `makeUnavailableLyrics` 构造，而它原本只在有原始颜色时才设颜色：
+
+```swift
+// 颜色沿用 Spotify 原来那份：背景色 / 歌名配色保持原样，看不出被替换过。
+if let originalColors { $0.colors = originalColors }
+```
+
+404 曲目（Spotify 自己没词）必然 `originalColors == nil` → `colors` **整块空着** → 客户端把卡片与全屏页刷成纯黑。
+
+同一个失败模式在**钩子侧的兄弟函数** `unavailableLyricsBytes` 里早就被防住了，它的注释原话是
+"404 场景下没有原始歌词可继承配色，给一套中性配色，避免客户端拿到全 0 颜色把整页刷成纯黑"
+—— 只是**仓库这条路没防**。又是"两条路径必须一致、结果却不一致"。
+
+**修复**：配色计算抽成共用的 `synthesizedLyricsColors()`（`CustomLyrics.x.swift`），两条路都调它：
+
+- `makeUnavailableLyrics`：`$0.colors = originalColors ?? synthesizedLyricsColors()`
+- `makeLyrics` 的自造颜色分支：直接调用同一个函数（删掉第二份实现，防止再次分叉）
+
+**待验证**：换一首"取不到词"的曲目（`NIGHT VIBE` / `Montagem Digital 3`）看卡片是否变成
+封面主色面板 + 可读文字；同时确认取得到词的曲目（`bye bitch!`）观感不变。
+
+**顺带记一笔（本轮没动）**：`unavailableLyricsBytes` 里那套中性配色（`0xFF121212` 面板 + 灰/白字）
+会在 `original == nil` 时**覆盖**共用函数算出来的颜色。它可读、不是 bug，
+但会让"钩子兜底"与"仓库兜底"两条路观感不同；要统一的话删掉那段覆盖即可。
+
+---
+
+## 13. 历史遗留（原 §9/§11，位置随追加而后移）
 
 - ~~§0 的"两个面互斥、合成时间轴把卡片挤掉"~~ → **作废**，见 §7.3/§7.4：无时间轴并不产生卡片，
   真正决定卡片存在性的是服务端的元素列表；

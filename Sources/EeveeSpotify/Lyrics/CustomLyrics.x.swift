@@ -340,6 +340,47 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
     // MARK: - DTO → Lyrics
 
+    /// 自造一套可读的歌词配色（拿不到 Spotify 原始颜色时用）。
+    ///
+    /// **两条路径共用**：真实歌词（`makeLyrics` 里那段）与占位 payload
+    /// （`makeUnavailableLyrics`）。必须共用 —— 2026-09-25 日志 21 / 照片 09:09 的教训：
+    /// 占位那一支原本"`originalColors` 为 nil 就什么都不设"，于是 404 曲目
+    /// （Spotify 自己没词，必然没有 `originalColors`）的卡片与全屏页在**颜色字段全空**时
+    /// 被渲染成纯黑；而能取到词的曲目因为走了另一支，已经修好了。
+    ///
+    /// 底色约定与 `LyricsWordByWord.resolveTextColors` 一致：深底白字、浅底黑字。
+    func synthesizedLyricsColors() -> LyricsColors {
+        let settings = UserDefaults.lyricsColors
+        let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
+
+        let extractedColor: String? = switch EeveeSpotify.hookTarget {
+        case .lastAvailableiOS14:
+            track?.extractedColorHex()
+        default:
+            track?.metadata()["extracted_color"]
+        }
+
+        var color: Color
+        if settings.useStaticColor {
+            color = Color(hex: settings.staticColor)
+        } else if let extractedColor {
+            color = Color(hex: extractedColor)
+                .normalized(settings.normalizationFactor)
+        } else if let uiColor = backgroundViewModel?.color() {
+            color = Color(uiColor)
+                .normalized(settings.normalizationFactor)
+        } else {
+            color = Color.gray
+        }
+
+        let isDarkBackground = color.brightness < 0.5
+        return LyricsColors.with {
+            $0.backgroundColor = color.uInt32
+            $0.lineColor = (isDarkBackground ? Color.white.opacity(0.72) : Color.black).uInt32
+            $0.activeLineColor = (isDarkBackground ? Color.white : Color.black).uInt32
+        }
+    }
+
     /// 「取不到我们的歌词」时交给 Spotify 的替身 payload —— 目的是**不让 Spotify 把
     /// 它自己的官方歌词显示出来**。
     ///
@@ -408,10 +449,13 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                     }
                 }
             }
-            // 颜色沿用 Spotify 原来那份：背景色 / 歌名配色保持原样，看不出被替换过。
-            if let originalColors {
-                $0.colors = originalColors
-            }
+            // 颜色：有 Spotify 原来那份就沿用（背景色 / 歌名配色保持原样，看不出被替换过）；
+            // **没有的时候必须自己造一套** —— 404 曲目（Spotify 自己没词）必然没有
+            // `originalColors`，而 `colors` 空着会让卡片与全屏页渲染成**纯黑**：
+            // 真机 2026-09-25 09:09（NIGHT VIBE）+ 日志 21 正是这个组合（那一批曲目全都
+            // 是 `[NetEase] No usable lyrics` → `serving our placeholder`），
+            // 而同一份日志里能取到词的曲目已经有 `keeping synthesized background opaque` 生效。
+            $0.colors = originalColors ?? synthesizedLyricsColors()
         }
     }
 
@@ -632,38 +676,10 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
         writeDebugLog("[Lyrics] Using original colors")
         lyrics.colors = originalLyrics.colors
     } else {
-        let extractedColor = switch EeveeSpotify.hookTarget {
-        case .lastAvailableiOS14:
-            track.extractedColorHex()
-        default:
-            track.metadata()["extracted_color"]
-        }
-
-        var color: Color
-        if lyricsColorsSettings.useStaticColor {
-            color = Color(hex: lyricsColorsSettings.staticColor)
-        } else if let extractedColor = extractedColor {
-            color = Color(hex: extractedColor)
-                .normalized(lyricsColorsSettings.normalizationFactor)
-        } else if let uiColor = backgroundViewModel?.color() {
-            color = Color(uiColor)
-                .normalized(lyricsColorsSettings.normalizationFactor)
-        } else {
-            color = Color.gray
-        }
-
-        // 文字色按**实际底色的明暗**选，而不是写死黑字。
-        //
-        // 写死 `lineColor = Color.black` 的那套约定来自"Spotify 自己的兜底底"（浅色面板）；
-        // 而这个分支的底色是我们按封面主色算出来的**中深色**（真机日志里是 FF5C778C /
-        // FF8E8E93 / FF7096BB 这类）—— 黑字压上去就是黑字压深底。
-        // 与 `LyricsWordByWord.resolveTextColors` 保持同一约定：深底白字、浅底黑字。
-        let isDarkBackground = color.brightness < 0.5
-        lyrics.colors = LyricsColors.with {
-            $0.backgroundColor = color.uInt32
-            $0.lineColor = (isDarkBackground ? Color.white.opacity(0.72) : Color.black).uInt32
-            $0.activeLineColor = (isDarkBackground ? Color.white : Color.black).uInt32
-        }
+        // 与占位 payload 走**同一个** `synthesizedLyricsColors()`：这两条路必须给出一致的配色，
+        // 否则又会分叉成"取不到词的曲目是黑块、取得到词的不是" —— 那正是 2026-09-25 09:09
+        // 照片与日志 21 里的现象（根因是两条路各写了一份、其中一份什么都不设）。
+        lyrics.colors = synthesizedLyricsColors()
         usesSynthesizedColors = true
     }
 
