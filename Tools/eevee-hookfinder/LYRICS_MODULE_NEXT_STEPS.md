@@ -497,6 +497,68 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 32. 「壳写着新歌名、歌词还是上一首的」= 切歌没来歌词请求时的陈旧行模型（2026-09-25，日志 28）
+
+用户原话：waka 那首歌（Planetarium）**底子是 Spotify 自己的 PetitLyrics，我们那层只盖住
+一小部分，而且内容还是上一首的**；不是稳定复现，属于小概率事件。
+
+### 日志证据（两件事是**两个**原因，别混）
+
+现场是 `Planetarium - waka`（NetEase 只给行级：`Applied official romaji (23 line(s))`）
+与 `ただ声一つ - Rokudenashi`（有 yrc：31/33 行带词级时间轴）来回切：
+
+```
+15:16:12  stale attachment cleared — the layer is not in any window (wasFullscreen=false)
+15:16:12  legacy overlay attached — host=…LyricsTextView 342x256 shell=false level=word
+15:16:12  [Shell] legacy metadata "Planetarium" — "waka"        ← 壳：这一首
+15:16:13  word-level judge: 31/33 … render mode=word             ← 模型：上一首的 33 行
+15:16:14  t=48309ms line=8 w8=" ni"@48010ms                      ← 画的是 48s 的上一首内容
+（15:16:59 切回 Planetarium 再来一次，一模一样）
+```
+
+关键：这两次切回 Planetarium **没有** `[Lyrics] Request for /color-lyrics/v2/…`，
+所以 `resetWordByWordLyrics()` 没被调用，`currentLyricsDto` 一直是上一首的。
+
+| 现象 | 原因 | 归属 |
+|---|---|---|
+| **内容是上一首的** | 切歌不一定来歌词请求（客户端命中自己的歌词存储 / 离线歌词）→ `resetWordByWordLyrics()` 不跑 → dto 陈旧；而壳上的曲名是每帧从播放器实时读的，于是"壳新、词旧" | **我们的 bug** ✔本轮回修 |
+| **底子是 PetitLyrics，我们只盖住一小部分** | 那次**根本没有网络响应**（Spotify 用自己存的歌词直接渲染）→ 替换 payload 的钩子没机会跑 → 露出来的是官方歌词（日区 = プチリリ）；而我们的层只占歌词控件那一块（卡片里的 342x256），不是整页 | Spotify 侧的路径，我们目前**替换不了**（见下） |
+
+### 回修：给行模型记"归属曲目"，两层每帧比对
+
+AM 层早就有这条判据（`AppleMusicLyricsOverlayHost.hasForeignLineModel` +
+`currentModelTrackId`，在 `tick` 里每帧比对）；**旧层一直缺**，所以这个 bug 只在
+"普通逐词"那条路上出现（日志 28 里用户就是 AM 关）。
+
+| 文件 | 改动 |
+|---|---|
+| `Lyrics/LyricsWordByWord.x.swift` | 新增全局 `currentLyricsDtoTrackId`（这份 dto 属于哪一首） |
+| 同上 → `LyricsWordByWordOverlayView` | 新增 `liveTrackIdentifier` / `belongsToAnotherTrack` / `handBackToNative()`；`setCurrentTime` 每帧先查归属，**不属于这一首 → 整层交还原生**，并打一行节流日志 `line model belongs to another track (model=…, live=…) — handing back to Spotify's own lyrics` |
+| 同上 → `WordByWordHost` | 新增 `lineModelIsForeign`；`refreshForCurrentLyrics` 里**一个挂载点都不试**（否则挂上去画的就是上一首的），并 `detach()` 掉已经挂着的 |
+| `Lyrics/CustomLyrics.x.swift` | `storeLyricsDto` 写入 `currentLyricsDtoTrackId`（优先请求里的曲目 id，退回播放器实时读）；`resetWordByWordLyrics` 一起清空 |
+
+顺带把手写三遍的"交还原生"收成一个 `handBackToNative()` —— 以前是逐处抄，漏一处
+就是"层撤了但底色还在"。
+
+### 还没解决的那一半（PetitLyrics 当底）
+
+我们只在**网络响应**上做替换（`color-lyrics/v2` 的 `didReceiveResponse`/`didReceiveData`）。
+Spotify 若是从它**自己存的歌词**（离线歌词 / 内存缓存）直接渲染，就没有响应可替换，
+露出来的必然是官方歌词（日区 `プチリリ`，不带 `(EeveeSpotify)`）。
+本轮的改动至少保证了：**不会再显示上一首的歌词**（宁可是这首歌的官方歌词）。
+
+要连这一半也解决，只有两条路（都还没做，也没验证过）：
+
+1. 找到"让客户端重新取一次歌词"的内部入口（`NPV scroll — enabling local track URI override`
+   那类调用已经在用类似手段），在检测到"切歌了但没有歌词请求"时主动触发一次 ——
+   只要它走网络，就会经过我们的钩子；
+2. 或者勾到歌词**渲染层**（`Lyrics_TextElementImpl` 一类），直接把行模型塞进去 ——
+   那是"接管原生视图"那条被真机否掉过的路，风险高。
+
+**未验证**：没有本地编译（无 Swift 工具链），也没有真机复测。
+
+---
+
 ## 31. 日志 27 的两件事：占位署名、AM 全屏进度条拖不动（2026-09-25）
 
 ### 31.1 取不到词时，`歌词提供者` 只剩 "EeveeSpotify"

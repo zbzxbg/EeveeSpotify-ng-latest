@@ -18,6 +18,32 @@ import SwiftUI
 
 var currentLyricsDto: LyricsDto?
 var currentLyricsVersion: Int = 0
+
+/// `currentLyricsDto` 这份数据**属于哪一首**（曲目 id）。
+///
+/// ── 为什么需要它（日志 28 的真机现场）────────────────────────────────────
+/// 切歌**不一定**伴随一次歌词请求：客户端命中自己的歌词存储 / 离线歌词时不会有
+/// `color-lyrics` 请求，于是 `resetWordByWordLyrics()` 根本不会被调用，
+/// `currentLyricsDto` 还是上一首的。而壳上的曲名是每帧从播放器实时读的 ——
+/// 于是出现那种状态：**壳写着新歌名、歌词内容还是上一首的**。
+///
+/// 日志 28 的实证（Planetarium - waka ↔ ただ声一つ - Rokudenashi 来回切）：
+/// ```
+/// [Shell] legacy metadata "Planetarium" — "waka"          ← 壳：这首歌
+/// [WordByWord] word-level judge: 31/33 … render mode=word ← 模型：上一首的 33 行
+/// ```
+/// 而 Planetarium 自己的 dto 是 23 行、无逐词（`Applied official romaji (23 line(s))`）。
+/// 两次切回 Planetarium（15:16:12 / 15:16:59）都**没有** `[Lyrics] Request for`，
+/// 所以 dto 一直没被换掉。
+///
+/// AM 层早就有这条判据（`AppleMusicLyricsOverlayHost.hasForeignLineModel` +
+/// `currentModelTrackId`，每帧在 `tick` 里比对），旧层一直缺 —— 这份记录就是把它
+/// 补成两层共用的一份。
+///
+/// 写入时机见 `CustomLyrics.storeLyricsDto`（与 dto 同刻写），清空见
+/// `resetWordByWordLyrics`。
+var currentLyricsDtoTrackId: String = ""
+
 /// 最终生效的歌词背景色（ARGB），CustomLyrics 算完 colors 后写入，供 overlay 与原生模块同色。
 var currentLyricsBackgroundColorARGB: UInt32 = 0
 /// 歌词提供者文本（如 "PetitLyrics (EeveeSpotify)"），用于 overlay 底部展示。
@@ -879,6 +905,47 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         }
     }
 
+    // MARK: 行模型归属
+
+    /// 当前**实时**播放的曲目 id。
+    ///
+    /// 与壳上的曲名同一个来源（`refreshShellMetadata` 也是从这里读的），
+    /// 所以"壳显示的歌"和"这个判据认为的歌"永远是同一首。
+    private var liveTrackIdentifier: String {
+        statefulPlayer?.currentTrack()?.trackIdentifier ?? ""
+    }
+
+    /// `currentLyricsDto` 是不是**别的**曲目的（切歌但没来歌词请求时会发生）。
+    ///
+    /// 两层的口径必须一致：AM 层是 `AppleMusicLyricsOverlayHost.hasForeignLineModel`，
+    /// 旧层就是这里。详见文件顶部 `currentLyricsDtoTrackId` 的说明。
+    private var belongsToAnotherTrack: Bool {
+        let model = currentLyricsDtoTrackId
+        let live = liveTrackIdentifier
+        guard !model.isEmpty, !live.isEmpty else { return false }
+        return model != live
+    }
+
+    /// 上一次为"模型属于别的曲目"打过日志的那首曲目 id —— 同一首只打一行，
+    /// 这个判据是每帧跑的，不记就会把日志刷爆。
+    private var loggedForeignModelTrackId: String?
+
+    /// 整层交还 Spotify 原生：清底、藏歌词与淡出带、触摸穿透、自绘控制条一起收。
+    ///
+    /// 抽出来是因为现在有**三处**判据要走它（没有逐词数据 / 模型属于别的曲目 /
+    /// 图层关闭）。以前是逐处手写一遍，漏一处就是"层撤了但底色还在"那种不一致。
+    private func handBackToNative() {
+        backgroundColor = .clear
+        backdropView.isHidden = true
+        stackView.isHidden = true
+        topFadeView.isHidden = true
+        bottomFadeView.isHidden = true
+        isUserInteractionEnabled = false   // 回退原生时让触摸穿透，别挡住原生歌词滚动
+        // 整层都交还给原生时，自绘控制条也必须一起交还 ——
+        // 否则会留下两颗悬浮的按钮压在 Spotify 原生界面上。
+        applyControlsVisibility(false)
+    }
+
     /// 每帧由时钟调用：惰性取 dto、词级高亮、自动滚动。
     func setCurrentTime(_ ms: Double) {
         updateShellPlayback()
@@ -900,6 +967,30 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         // 文字色取决于背景明暗，而 rebuild() 已经按旧色建过标签了。
         configureBackdropIfNeeded()
 
+        // ── 行模型是不是**这一首**的？（与 AM 层 `hasForeignLineModel` 同一判据）────
+        //
+        // 切歌**不一定**伴随歌词请求：客户端命中自己的歌词存储 / 离线歌词时没有
+        // `color-lyrics` 请求，`resetWordByWordLyrics()` 就不会跑，`currentLyricsDto`
+        // 还是上一首的 —— 而壳上的曲名是每帧从播放器实时读的。真机现场（日志 28）：
+        // `[Shell] legacy metadata "Planetarium"` 配 `word-level judge: 31/33`（那是上
+        // 一首 Rokudenashi 的 33 行模型，而 Planetarium 自己的 dto 只有 23 行、无逐词）。
+        //
+        // 处置：整层交还。宁可只显示"这首歌的原生歌词"（哪怕那是官方 PetitLyrics），
+        // 也绝不能显示上一首的歌词 —— 后者会让人以为"歌词源串了"。
+        if belongsToAnotherTrack {
+            let live = liveTrackIdentifier
+            if loggedForeignModelTrackId != live {
+                loggedForeignModelTrackId = live
+                writeDebugLog(
+                    "[WordByWord] line model belongs to another track"
+                        + " (model=\(currentLyricsDtoTrackId), live=\(live))"
+                        + " — handing back to Spotify's own lyrics"
+                )
+            }
+            handBackToNative()
+            return
+        }
+
         // 撤层的条件必须与 `attach` 的挂载判据**完全一致**：只有拿到逐词数据的歌才由我们渲染。
         //
         // ⚠️ 这条 2026-09-25 从 `hasUsableLineLevelData` 收回到 `hasUsableWordLevelData`：
@@ -908,15 +999,7 @@ final class LyricsWordByWordOverlayView: UIView, UIScrollViewDelegate {
         // 但早先挂上去的旧层还在自己画"的不一致状态 —— 层不会自己消失。
         // 真正该撤的还是那三种：无逐词数据 / 静态歌词 / 还没拿到 dto。
         guard let dto, hasUsableWordLevelData(dto) else {
-            backgroundColor = .clear
-            backdropView.isHidden = true
-            stackView.isHidden = true
-            topFadeView.isHidden = true
-            bottomFadeView.isHidden = true
-            isUserInteractionEnabled = false   // 回退原生时让触摸穿透，别挡住原生歌词滚动
-            // 整层都交还给原生时，自绘控制条也必须一起交还 ——
-            // 否则会留下两颗悬浮的按钮压在 Spotify 原生界面上。
-            applyControlsVisibility(false)
+            handBackToNative()
             return
         }
 
@@ -1529,6 +1612,17 @@ final class WordByWordHost {
         InlineLyricsHostLocator.retryLookupIfNeeded()
     }
 
+    /// 当前 dto 是不是**别的**曲目的（切歌但没来歌词请求时会发生）。
+    ///
+    /// 与旧层 `LyricsWordByWordOverlayView.belongsToAnotherTrack` 同一判据，
+    /// 详见文件顶部 `currentLyricsDtoTrackId` 的说明。
+    var lineModelIsForeign: Bool {
+        let model = currentLyricsDtoTrackId
+        let live = statefulPlayer?.currentTrack()?.trackIdentifier ?? ""
+        guard !model.isEmpty, !live.isEmpty else { return false }
+        return model != live
+    }
+
     /// 歌词数据到达后调用一次：把 overlay 重挂到**当前这首歌**的数据上。
     ///
     /// 为什么需要它：`attach` 只由宿主出现触发（`viewWillAppear` 等），而 9.1.x 上
@@ -1565,6 +1659,18 @@ final class WordByWordHost {
                 }
                 AppleMusicLyricsOverlayHost.shared.refreshLinesIfNeeded()
             }
+            return
+        }
+
+        // 行模型属于**别的**曲目（切歌但没来歌词请求，见 `currentLyricsDtoTrackId`）
+        // → 一个挂载点都别试：挂上去画的就是上一首的歌词（真机日志 28）。
+        // 真正的歌词到达时版本号会变，这条判据自然为假，届时会重挂。
+        guard !lineModelIsForeign else {
+            Self.logRejectionThrottled(
+                "[WordByWord] line model belongs to another track — not attaching"
+                    + " (model=\(currentLyricsDtoTrackId))"
+            )
+            if isAttached { detach() }
             return
         }
 

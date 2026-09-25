@@ -469,6 +469,15 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
         let overlayDto = dto.romanizedForWordByWordIfEnabled()
         currentLyricsDto = overlayDto
+        // 这份数据**属于哪一首**：切歌不一定伴随歌词请求（客户端命中自己的歌词存储 /
+        // 离线歌词时不会有 `color-lyrics` 请求），所以"模型归属"必须显式记下来，
+        // 供两层每帧比对。详见 `currentLyricsDtoTrackId` 的说明。
+        //
+        // 优先用"这次请求问的那首"（`lyricsLayerTrackId` 在请求入口就写好了），
+        // 再退回播放器实时读到的曲目。
+        currentLyricsDtoTrackId = lyricsLayerTrackId
+            ?? statefulPlayer?.currentTrack()?.trackIdentifier
+            ?? ""
         // ⚠️ 提供者要在**版本号自增之前**写好：观察者（两个 overlay 层）都是
         // 盯着版本号决定要不要重建的，版本一变它们就会立刻读 `currentLyricsProvider`。
         currentLyricsProvider = overlayDto.providerName
@@ -503,6 +512,8 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     private func resetWordByWordLyrics(reason: String = "no custom lyrics for this track") {
         writeDebugLog("[Lyrics] \(reason) — clearing word-by-word layer")
         currentLyricsDto = nil
+        // 模型归属也要一起清：留着它会让"这份数据属于哪一首"永远指向上一首。
+        currentLyricsDtoTrackId = ""
         currentLyricsProvider = ""
         currentLyricsVersion += 1
         onMainThreadSync {
