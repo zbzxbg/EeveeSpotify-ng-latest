@@ -46,7 +46,7 @@ ngzhwm_amll_preferred = "AMLL优先";
 ngzhwm_amll_preferred_description = "选项生效需要开启逐词歌词。选项开启后会优先向AMLL请求逐词歌词。如果AMLL未返回逐词歌词，则回退用户自己选择的歌词来源和相关设置进行请求。目前开启该选项后，歌词将不展示歌词翻译。";
 
 genius_fallback = "Genius回退";
-genius_fallback_description = "该功能在此版本上体验不佳。如果 %@ 未正常加载，将使用 Genius 加载歌词。开启此选项后，部分歌曲的预判歌词模块会不展示。";
+genius_fallback_description = "该功能在此版本上体验不佳。如果 %@ 未正常加载，将使用 Genius 加载歌词。开启此选项后，部分歌曲的预览歌词模块会不展示。";
 
 hide_lyrics_on_error = "隐藏歌词模块";
 hide_lyrics_on_error_description = "如果歌词加载失败，则隐藏歌词模块。";
