@@ -1549,7 +1549,7 @@ final class WordByWordHost {
                 // 那时 `refreshLinesIfNeeded()` 的 guard 会直接返回，而全屏页的
                 // appear 回调不会再来 —— 新歌词就永远推不进去。所以这里要能补挂一次。
                 if NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled,
-                   hasUsableWordLevelData(currentLyricsDto),
+                   hasUsableLineLevelData(currentLyricsDto),
                    AppleMusicLyricsOverlayHost.shared.overlayView == nil,
                    let controller = fullscreenController {
                     writeDebugLog("[WordByWord] fullscreen layer was dropped — reattaching")
@@ -1704,9 +1704,8 @@ final class WordByWordHost {
         let sideInset = sideInset ?? 16
         // 逐字可用 → 走逐字高亮；只有逐行 → 仍然由我们渲染（降级档）。
         //
-        // ⚠️ 这两个值**必须分开**：`usable`（逐字）只用来决定"走不走 Apple Music 新层"
-        // 以及"高亮精度"；能不能挂上这一层要看 `lineLevelUsable`。
-        // 合成一个的话，"有逐行没逐字"那批歌就会掉回原生（见 `hasUsableLineLevelData` 的说明）。
+        // ⚠️ 这两个值**必须分开**：`usable`（逐字）只表示"高亮精度到词"；
+        // 能不能挂上这一层要看 `lineLevelUsable`。
         let usable = hasUsableWordLevelData(currentLyricsDto)
         let lineLevelUsable = hasUsableLineLevelData(currentLyricsDto)
 
@@ -1716,8 +1715,16 @@ final class WordByWordHost {
         // 两条路是**两套歌词渲染**（高亮/闪烁/译文处理都不同），
         // 用户要的只是"壳的观感一致"，不是"把歌词也换掉"——
         // 曾经试过让旧层也走新页面（连歌词一起换），被退回来了。
+        //
+        // ⚠️ 判据是**行级**（`lineLevelUsable`）而不是逐字（`usable`）：
+        // AM 页自己就会处理"只有行级时间轴"的数据 ——
+        // `SynchronizedLyricText.resolvedText` 在没有逐字时退回普通文本，
+        // `LyricLine.makePseudoSyllables()` 更是专门为 LRCLIB / Genius 这类
+        // "没有逐字时间轴"的来源按字均分整行时长（注释里写得很清楚）。
+        // 以前这里要求逐字，于是**行级数据只能掉回旧层**，真机观感就是
+        // "内容明明是逐行，背景与壳却是普通逐词那一套"。
         if #available(iOS 26.0, *),
-           usable,
+           lineLevelUsable,
            NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled {
             // ⚠️ 这里**不碰任何原生视图**：不隐藏、不清底色、不动 z 序。
             //

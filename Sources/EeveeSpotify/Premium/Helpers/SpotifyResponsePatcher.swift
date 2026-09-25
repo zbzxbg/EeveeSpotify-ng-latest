@@ -247,6 +247,30 @@ enum SpotifyResponsePatcher {
         )
     }
 
+    // MARK: - 「禁用歌词功能」
+
+    /// 「禁用歌词功能」是否生效。
+    ///
+    /// 选项说明原话（`ngzhwm_disable_lyrics_feature_description`）："禁用有关于自定义歌词的
+    /// 所有功能，**还会阻止 Spotify 返回其自带的歌词**"。也就是说这个开关必须**主动拦掉**两份数据：
+    ///
+    ///   1. 我们自己那份 —— `getLyricsDataForCurrentTrack` 已经在抛 `.invalidSource` ✔；
+    ///   2. **Spotify 自带那份** —— 以前两条路都漏了：
+    ///      · 200 那条：取词抛错后走 `lyricsPayload = buffer`，把官方歌词**原样放行**；
+    ///      · 404 那条：`didReceiveResponse` **无条件**合成 200 + 我们的占位。
+    ///      结果就是"开关打开后歌词照旧显示"，观感即"选项不生效"。
+    static var isLyricsFeatureDisabled: Bool {
+        NgzhwmSettingsViewModel.isLyricsFeatureDisabled
+    }
+
+    /// 禁用时交给 Spotify 的「没有歌词」payload —— 用它挡住 Spotify 自带的那份。
+    ///
+    /// 用既有的占位（"未找到歌词" + 提示行）而不是空 payload：它是本模块唯一一条
+    /// "必须给出可解析响应"的既有路径，文案与其它失败路径一致，也不会让客户端拿到空数据。
+    static func disabledLyricsPayload(original: Lyrics?) -> Data {
+        unavailableLyricsBytes(original: original) ?? Data()
+    }
+
     static func shouldBlock(_ url: URL) -> Bool {
         let elapsed = Date().timeIntervalSince(tweakInitTime)
         let path = url.path.lowercased()
@@ -286,9 +310,10 @@ enum SpotifyResponsePatcher {
                 isDAC
             ))
             || BrowsitaSectionStripper.shouldHandle(url)
-            // 只在开关打开时才把正在播放页的元素列表收下来改写（关着就零开销、
-            // 连缓冲都不做）。见 `ScrollsitaLyricsElementInjector`。
-            || (NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled
+            // 正在播放页元素列表：补卡片（实验开关）或**摘掉**卡片（「禁用歌词功能」）。
+            // 关着且没禁用时零开销，连缓冲都不做。见 `ScrollsitaLyricsElementInjector`。
+            || ((NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled
+                 || isLyricsFeatureDisabled)
                 && ScrollsitaLyricsElementInjector.shouldHandle(url))
     }
 
@@ -329,6 +354,7 @@ enum SpotifyResponsePatcher {
         case dacEmpty    = "dac"
         case casitaStrip = "casitaStrip"
         case lyricsCardElement = "LyricsCardElement"
+        case lyricsCardElementStripped = "LyricsCardElementStripped"
     }
 
     struct PatchResult {
@@ -370,7 +396,16 @@ enum SpotifyResponsePatcher {
             // Empty body = "no ad to render" to the DAC consumer.
             return PatchResult(data: Data(), tag: .dacEmpty)
         }
+        // 「禁用歌词功能」时把服务端下发的「歌词卡片」元素**摘掉** —— 否则卡片照样在
+        // （只是内容换成我们那份"未找到歌词"），用户会觉得开关没生效。
+        if let stripped = ScrollsitaLyricsElementInjector.strippingLyricsElementIfNeeded(
+            url: url,
+            body: buffer
+        ) {
+            return PatchResult(data: stripped, tag: .lyricsCardElementStripped)
+        }
         if NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled,
+           !isLyricsFeatureDisabled,
            ScrollsitaLyricsElementInjector.shouldHandle(url),
            let injected = ScrollsitaLyricsElementInjector.injectIfNeeded(url: url, body: buffer) {
             return PatchResult(data: injected, tag: .lyricsCardElement)

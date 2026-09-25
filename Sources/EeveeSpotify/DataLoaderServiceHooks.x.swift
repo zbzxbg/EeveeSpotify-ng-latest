@@ -104,6 +104,19 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             if url.isLyrics {
                 let originalLyrics = try? Lyrics(serializedBytes: buffer)
 
+                // 「禁用歌词功能」：**主动挡掉 Spotify 自带的那份歌词**。
+                // 理由同 `HttpClientURLSessionHooks`：选项说明就写着"还会阻止 Spotify 返回
+                // 其自带的歌词"，而这条路以前是 `lyricsPayload = buffer`（把官方歌词放行）。
+                if SpotifyResponsePatcher.isLyricsFeatureDisabled {
+                    let blocked = SpotifyResponsePatcher.disabledLyricsPayload(original: originalLyrics)
+                    writeDebugLog("[DL] lyrics feature disabled — blocking Spotify's own lyrics")
+                    DispatchQueue.main.async { [self] in
+                        orig.URLSession(session, dataTask: task, didReceiveData: blocked)
+                        orig.URLSession(session, task: task, didCompleteWithError: nil)
+                    }
+                    return
+                }
+
                 let semaphore = DispatchSemaphore(value: 0)
                 var customLyricsData: Data?
 
@@ -185,6 +198,14 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         // proceed until we call handler(.allow/.cancel), so we have time to fetch
         // and then deliver everything ourselves.
         guard let url = task.currentRequest?.url, url.isLyrics, response.statusCode != 200 else {
+            orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
+            return
+        }
+
+        // 「禁用歌词功能」：这条路以前会**无条件**合成 200 + 我们的占位（"未找到歌词"）。
+        // 禁用时直接放行原始 404 —— 不取词、不合成，真正的"什么都不做"。
+        if SpotifyResponsePatcher.isLyricsFeatureDisabled {
+            writeDebugLog("[DL] lyrics feature disabled — passing the \(response.statusCode) through")
             orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
             return
         }

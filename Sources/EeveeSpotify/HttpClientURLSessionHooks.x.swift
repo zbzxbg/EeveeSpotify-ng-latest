@@ -71,6 +71,19 @@ class HttpClientURLSessionHook: ClassHook<NSObject>, SpotifySessionDelegate {
             if url.isLyrics {
                 let originalLyrics = try? Lyrics(serializedBytes: buffer)
 
+                // 「禁用歌词功能」：**主动挡掉 Spotify 自带的那份歌词**。
+                //
+                // 选项说明原话就是"还会阻止 Spotify 返回其自带的歌词"，而这里以前走的是
+                // 下面的 `lyricsPayload = buffer`（取词抛 `.invalidSource` → 放行原始响应），
+                // 于是开关打开后官方歌词照旧显示 —— 观感即"选项不生效"。
+                if SpotifyResponsePatcher.isLyricsFeatureDisabled {
+                    let blocked = SpotifyResponsePatcher.disabledLyricsPayload(original: originalLyrics)
+                    writeDebugLog("[HCUS] lyrics feature disabled — blocking Spotify's own lyrics")
+                    orig.URLSession(session, dataTask: task, didReceiveData: blocked)
+                    orig.URLSession(session, task: task, didCompleteWithError: nil)
+                    return
+                }
+
                 let semaphore = DispatchSemaphore(value: 0)
                 var customLyricsData: Data?
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -135,6 +148,15 @@ class HttpClientURLSessionHook: ClassHook<NSObject>, SpotifySessionDelegate {
         }
 
         guard let url = task.currentRequest?.url, url.isLyrics, response.statusCode != 200 else {
+            orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
+            return
+        }
+
+        // 「禁用歌词功能」：这条路以前会**无条件**合成 200 + 我们的占位（"未找到歌词"），
+        // 于是开关打开后我们那份照样出现。禁用时直接放行原始 404（等于"这首歌没有歌词"），
+        // 既不取词、也不合成 —— 真正的"什么都不做"。
+        if SpotifyResponsePatcher.isLyricsFeatureDisabled {
+            writeDebugLog("[HCUS] lyrics feature disabled — passing the \(response.statusCode) through")
             orig.URLSession(session, dataTask: task, didReceiveResponse: response, completionHandler: handler)
             return
         }

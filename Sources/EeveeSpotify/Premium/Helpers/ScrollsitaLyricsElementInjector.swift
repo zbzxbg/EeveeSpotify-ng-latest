@@ -44,9 +44,80 @@ enum ScrollsitaLyricsElementInjector {
         url.path.contains("/scrollsita/v1/scroll/spotify:track:")
     }
 
+    /// 把服务端下发的「歌词卡片」元素**摘掉**（「禁用歌词功能」时用）。
+    ///
+    /// 为什么需要：卡片的存在性来自这份元素列表（§7 的结论）。所以哪怕我们不再替换歌词，
+    /// 只要服务端还下发这一项，卡片就照样在（只是内容变成我们那份"未找到歌词"）——
+    /// 用户开了「禁用歌词功能」却仍看到歌词卡片，观感就是"选项不生效"。
+    ///
+    /// 与注入同一条安全边界：解析不过就返回 nil（原样放行），组装后再自检一遍。
+    static func strippingLyricsElementIfNeeded(url: URL, body: Data) -> Data? {
+        guard NgzhwmSettingsViewModel.isLyricsFeatureDisabled, shouldHandle(url) else { return nil }
+
+        let bytes = [UInt8](body)
+        var index = 0
+
+        guard let firstKey = readVarint(bytes, &index),
+              firstKey >> 3 == 1, firstKey & 7 == 2,
+              let elementList = readLengthDelimited(bytes, &index) else {
+            return nil
+        }
+        let trailing: [UInt8] = index < bytes.count ? Array(bytes[index...]) : []
+
+        // 逐个 item 过一遍：内层第一个字段号就是"元素类型"，`5` 就是歌词卡片。
+        var cursor = 0
+        var kept: [UInt8] = []
+        var removed = 0
+
+        while cursor < elementList.count {
+            let itemStart = cursor
+            guard let key = readVarint(elementList, &cursor),
+                  key >> 3 == 1, key & 7 == 2,
+                  let item = readLengthDelimited(elementList, &cursor) else {
+                return nil
+            }
+
+            var itemIndex = 0
+            guard let innerKey = readVarint(item, &itemIndex), innerKey & 7 == 2 else {
+                return nil
+            }
+
+            if innerKey >> 3 == lyricsElementFieldNumber {
+                removed += 1
+            } else {
+                kept += Array(elementList[itemStart..<cursor])
+            }
+        }
+
+        guard removed > 0 else { return nil }   // 本来就没有这一项 → 不动
+
+        var result: [UInt8] = [0x0A]
+        result += encodeVarint(kept.count)
+        result += kept
+        result += trailing
+
+        // 自检：还能完整解析，且 `5` 确实没了。
+        var check = 0
+        guard let checkKey = readVarint(result, &check),
+              checkKey >> 3 == 1, checkKey & 7 == 2,
+              let checkedList = readLengthDelimited(result, &check),
+              let checkedNumbers = elementFieldNumbers(checkedList),
+              !checkedNumbers.contains(lyricsElementFieldNumber) else {
+            writeDebugLog("[Scrollsita] ⚠️ strip self-check failed — leaving the body untouched")
+            return nil
+        }
+
+        writeDebugLog(
+            "[Scrollsita] stripped lyrics-card element ×\(removed)"
+                + " (lyrics feature disabled) — body \(bytes.count)B -> \(result.count)B"
+        )
+        return Data(result)
+    }
+
     /// 需要注入时返回**新的一份 body**；不需要/不敢动时返回 nil（调用方原样放行）。
     static func injectIfNeeded(url: URL, body: Data) -> Data? {
         guard NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled,
+              !NgzhwmSettingsViewModel.isLyricsFeatureDisabled,
               shouldHandle(url),
               let trackURI = trackURI(from: url) else {
             return nil

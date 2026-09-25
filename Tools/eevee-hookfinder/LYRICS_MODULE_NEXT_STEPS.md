@@ -497,6 +497,115 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 21. 第十轮：那张"很怪的全屏"是什么 + 译文到底哪来的
+
+**照片 `10-49-29`（全屏）的判读**：
+
+- 画面上**有中文译文** → 这本身就是判据：译文来自歌词源（网易云 / PL 的 tlyric），保存在
+  `currentLyricsDto.translation` 里，而**只有旧层全屏会画它**（`showsTranslation`：全屏 true / 预览 false）。
+- 日志 24 同一时段的实锤：
+  `[WordByWord] legacy overlay attached — host=UIView 414x896 shell=true sideInset=24 level=line`
+  + `[Shell] legacy metadata "Moderate (feat. wanko)" — "MIMI"`
+  → 全屏那一刻用的是**旧层**，而且是**行级**（同一批日志里 `word-level judge: 0/43 … word-level=N`，
+  即 NetEase 对这几首只给了 lrc）。
+
+所以"没有关闭键 / 没有歌手歌名 / 按键太靠下"不是我们的层坏了，而是**旧层全屏那套壳布局**
+（标题栏贴在 overlay 顶部、底部是它自己的进度条 + 三键），与 AM 页那套（标题/歌手/关闭/底部控件）
+本来就不是一个样子。这也正好解释了"看起来很奇怪"。
+
+**译文从哪来（回答"我记得我还没接歌词翻译"）**：
+
+- 源的译文一直在数据里，旧层全屏会按行画出来（预览不画）；
+- 注入给 Spotify 的那份 protobuf **只在关闭「更好的逐词歌词」时才带译文**：
+
+```swift
+// LyricsDto.toSpotifyLyricsData
+let suppliesTranslation = !NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled
+```
+
+  原因写在注释里：Spotify 只要看到注入数据里有 translation，就会在「歌词」标题栏亮起它自己的
+  **翻译按钮**，而 AM 页并不显示译文 —— 按钮点了什么都不会变，纯属误导。
+
+  ⇒ 所以"AM 开着还能看到译文"这件事，反过来正好证明**那一刻用的是旧层** ✔
+
+**收敛到同一个根因**：§20 已把"只有行级时间轴"的数据改走 AM 页 —— 这类
+"逐行内容 + 旧层全屏外壳"的组合应当随之消失（全屏会变成 AM 页那套：标题/歌手/关闭/底部控件）。
+若新构建后仍出现，再按 §17 的两个候选查（"划动收起壳"状态 / 宿主挂错）。
+
+**关于"预览显示上首歌的译文"**：那还是 §18 的陈旧行模型（预览里 `showsTranslation=false`，
+所以你看到的"译文"其实是上一首的**罗马化歌词行**，看起来像译文）。§18 的"切歌即清 + 渲染前比对曲目"
+正是针对它。
+
+---
+
+## 20. 第九轮：**"内容逐行、壳/背景却是逐词那一套"** —— 闸门收错了
+
+**先回答"是不是有两套逻辑"**：是，确实有**两套渲染器**，壳组件是共用的：
+
+| | Apple Music 页 | 旧 UIKit 层 |
+|---|---|---|
+| 代码 | `AppleMusicLyricsPage` / `AppleMusicLyricsOverlay` | `LyricsWordByWordOverlayView` |
+| 何时用（改前） | 「更好的逐词歌词」开 **且 `hasUsableWordLevelData`（≥50% 行有逐字时间轴）** | 其它情况（只有行级时间轴时就是它） |
+| 壳 | `LyricsShellChrome`（标题/歌手/关闭/进度） | **同一份** `LyricsShellChrome`（`LyricsShellHosts` 挂进去） |
+
+所以"两套逻辑"只在**渲染歌词**那部分，壳是共享的 —— 这正是它们看起来相似、却又在细节上对不上的原因。
+
+**症状**：某些来源（只有行级时间轴的那批）出现"**内容逐行、背景与壳却是普通逐词那一套**"。
+
+**根因**：AM 页的闸门用的是**逐字**判据 `usable`，可它自己**本来就支持只有行级时间轴的数据**：
+
+- `SynchronizedLyricText.resolvedText`：`syllables.isEmpty` → 退回普通文本（有渲染低档）；
+- `LyricLine.makePseudoSyllables()`：注释原话"均匀按「字」拆分整行时长，**用于没有逐字时间轴的来源（LRCLIB / Genius 等）**"。
+
+**修复**（`LyricsWordByWord.x.swift`）：
+
+1. `WordByWordHost.attach` 的 AM 分支判据：`usable` → **`lineLevelUsable`**（只要挂得上这一层就走 AM 外观）；
+2. `refreshForCurrentLyrics()` 里"全屏层掉了要补挂"的条件同样从 `hasUsableWordLevelData`
+   改成 `hasUsableLineLevelData`（否则行级歌的全屏层一旦掉了就补不回来）。
+
+**待验证**：那些"只有行级"的来源现在应统一走 AM 外观（整行高亮 / 伪逐字），
+不再出现"逐词的背景 + 逐行的内容"；`[WordByWord] legacy overlay attached … level=line` 应基本消失。
+
+---
+
+## 19. 第八轮：「禁用歌词功能」不生效（两条投递路径都绕过了它）
+
+**选项说明原话**（`ngzhwm_disable_lyrics_feature_description`）："开启后会禁用有关于自定义歌词的
+所有功能，**还会阻止 Spotify 返回其自带的歌词**"。
+
+**改前的实际行为**：只有 `getLyricsDataForCurrentTrack` 里那句
+`guard !isLyricsFeatureDisabled else { resetWordByWordLyrics(); throw .invalidSource }` 生效，
+而两条投递路径把它整个绕过去了：
+
+| 路径 | 改前 | 结果 |
+|---|---|---|
+| 完成回调（200 那条） | 取词抛错 → `customLyricsData == nil` → `lyricsPayload = buffer` | **Spotify 自带歌词原样放行** → "阻止…"完全没做到 |
+| 404 响应（`didReceiveResponse`） | **无条件**合成 200 + `unavailableLyricsBytes` | 开关开着也照样出现我们那份"未找到歌词" |
+
+再叠加 §6/§10 的元素注入（每首歌都有卡片），开关打开后界面照旧有歌词/卡片 —— 观感就是"不生效"。
+
+**修复**：
+
+1. `SpotifyResponsePatcher` 新增 `isLyricsFeatureDisabled` 与 `disabledLyricsPayload(original:)`；
+2. 两个钩子（`HttpClientURLSessionHooks` / `DataLoaderServiceHooks`）的 `url.isLyrics` 分支**开头**：
+   禁用 → 直接交"没有歌词"的占位（**主动挡住 Spotify 自带歌词**），也不再发起我们的取词；
+   日志 `lyrics feature disabled — blocking Spotify's own lyrics`；
+3. 两个钩子的 404 分支：禁用 → **放行原始 404**（不取词、不合成），
+   日志 `lyrics feature disabled — passing the 404 through`；
+4. `ScrollsitaLyricsElementInjector.strippingLyricsElementIfNeeded`：禁用时把服务端下发的
+   歌词卡片元素**摘掉**（`shouldModify` 相应把这种 URL 纳入改写范围）—— 否则卡片还在，
+   只是内容变成"未找到歌词"，仍然像"没生效"。
+
+**验证**：
+
+- 打开「禁用歌词功能」→ 播一首 Spotify 有官方歌词的歌：**不应**再显示官方歌词（改前照旧显示）；
+- 再播一首服务端没下发歌词元素的歌：**不应**再有歌词卡片（元素被摘掉）；
+- 关掉开关 → 一切恢复。
+
+**未验证**：无编译验证、无真机验证。
+
+---
+
 ## 18. 第七轮：切歌瞬间"预览显示上一首逐词歌词"（PL / MXM / AMLL 三个源都能复现）
 
 **症状**：切歌后，预览（卡片）里显示的是**上一首歌**的逐词歌词；窗口长度 ≈ 取词耗时 ——
