@@ -434,18 +434,22 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     /// 另一个是 URLSession 侧的"响应兜底"（见 `unavailableLyricsBytes`）。
     /// 两处必须长得一模一样，否则用户会在不同失败路径上看到不同文案。
     ///
-    /// - Parameter note: 追加在提示行之后的一句说明（例如"这首歌正在切换"）。
-    ///   传 nil 时保持与历史上完全一致的三行内容。
+    /// - Parameter note: 有值时**追加一行**说明（例如"这首歌正在切换"）。
+    ///   传 nil 时只有一行"未找到歌词"（历史上是三行：通知 + 空行 + 提示行；
+    ///   提示行 `ngzhwm_lyrics_unavailable_hint` 已于 2026-09-25 连同中文本地化一起删除）。
     func makeUnavailableLyrics(originalColors: LyricsColors?, note: String?) -> Lyrics {
         // 占位文案也要有行级时间轴。
         //
         // 理由与 `toSpotifyLyricsData` 相同：这个版本把"无时间轴"判为不可用，
         // 而占位恰恰是"取不到词"那条路上唯一交出去的东西 —— 没有时间轴就等于
         // 连"未找到歌词"都显示不出来，用户看到的是**彻底没有歌词模块**。
+        // ⚠️ 2026-09-25：`ngzhwm_lyrics_unavailable_hint`（"可以在设置里换一个歌词来源…"）
+        // 已随中文本地化一起删除 —— 占位现在只有"未找到歌词"一行（`note` 有值时追加一行）。
+        // 只删文案、留代码的话，两个 locale 都拿不到这个 key，界面会直接把 key 名当文案显示。
+        // 要把提示加回来：恢复下面那行 `LyricsLineDto(content: "…_hint".localized)`，
+        // 并在 en / zh-CN 两个 `Localizable.strings` 里补回该 key。
         var placeholderLines = [
-            LyricsLineDto(content: "ngzhwm_lyrics_unavailable".localized),
-            LyricsLineDto(content: ""),
-            LyricsLineDto(content: "ngzhwm_lyrics_unavailable_hint".localized)
+            LyricsLineDto(content: "ngzhwm_lyrics_unavailable".localized)
         ]
         if let note, !note.isEmpty {
             placeholderLines.append(LyricsLineDto(content: note))

@@ -497,6 +497,30 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 24. 本地化同步（2026-09-25）：英文跟上中文那几处改动
+
+中文文件被改过之后，英文同步；现在两个 locale 的 key 集**完全一致**
+（lyrics / ngzhwm / UI 三段的键各 42 项）：
+
+| 键 | 中文（用户改的） | 英文（本次） |
+|---|---|---|
+| `genius_fallback_description` | 前面加"该功能在此版本上体验不佳。"；尾部改为"部分歌曲的**预判**歌词模块会不展示" | "This feature does not work well on this version. If %@ fails to load, lyrics are loaded from Genius. With this option enabled, the **preview** lyrics module may not be displayed for some songs." |
+| `ngzhwm_multi_level_fallback_description` | 同样加了"该功能在此版本上体验不佳。" | 同步加上同一句前置 |
+| `ngzhwm_lyrics_unavailable_hint` | **删除** | 同步删除（连带下面那处代码改动） |
+| `ngzhwm_title` | 中文从来没有 | **删除**：`grep` 全仓库零引用，是死键 |
+
+⚠️ **连带的一处代码改动**（不改就是 bug）：`ngzhwm_lyrics_unavailable_hint` 仍被
+`makeUnavailableLyrics` 使用，两个 locale 都删掉之后，`.localized` 会把 **key 名本身**当文案显示。
+所以把那一行也删了 —— 占位 payload 从"三行（通知 + 空行 + 提示）"变成"一行（通知）"，
+`note` 有值时再追加一行。
+
+要恢复提示：把 `LyricsLineDto(content: "ngzhwm_lyrics_unavailable_hint".localized)` 加回
+`makeUnavailableLyrics`，并在 en / zh-CN 两个 `Localizable.strings` 里补回该键。
+
+**顺带一提**：中文那句"预判歌词模块"看着是"预览"的笔误，英文按 **preview** 写。
+
+---
+
 ## 23. 第十二轮：三个修复**写死启用**，去掉开关
 
 用户要求（原话）："隐藏官方歌词、补时间轴、补卡片这三个应该就是写在代码里写启用的，而不是靠选项来控制关闭。"
