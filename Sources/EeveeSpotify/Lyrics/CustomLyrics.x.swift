@@ -517,6 +517,12 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         }
     }
 
+    /// 上一次**已经装上/清空**的逐词层对应的曲目 id（切歌信号，见调用点）。
+    ///
+    /// 用途：把"切歌"这件事从"新歌词到达"里解耦出来。理由与 `AppleMusicLyricsOverlay`
+    /// 里 `currentModelTrackId` 的说明相同 —— 那边负责**渲染前**兜底，这边负责**尽早**清掉。
+    var lyricsLayerTrackId: String?
+
     /// 把逐词层的全局状态清空，并把已经挂上的层摘掉。
     ///
     /// 用于"这一首没有我们的歌词"（取词失败 / 用户选了 `notReplaced`）：
@@ -524,8 +530,11 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     /// 数据一清：
     ///   · 旧层整块透明 + 触摸穿透 → 原生歌词与控件原样可用；
     ///   · 新层因为没有行模型而 `detach()` → 同上。
-    private func resetWordByWordLyrics() {
-        writeDebugLog("[Lyrics] no custom lyrics for this track — clearing word-by-word layer")
+    ///
+    /// - Parameter reason: 日志里那句原因。默认保持历史文案（取词失败那条路）；
+    ///   切歌时传 "track changed…"，这样日志一眼能分清是"没词"还是"换歌"。
+    private func resetWordByWordLyrics(reason: String = "no custom lyrics for this track") {
+        writeDebugLog("[Lyrics] \(reason) — clearing word-by-word layer")
         currentLyricsDto = nil
         currentLyricsProvider = ""
         currentLyricsVersion += 1
@@ -645,6 +654,25 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     // 记下这一首的时长：占位文案的合成时间轴要用（那几步拿不到 track 对象）。
     // 与 `currentLyricsDto` 同一时机写入，语义都是"这一次请求的曲目"。
     currentTrackDurationMs = track.trackDurationMilliseconds
+
+    // ── 切歌信号：**立刻**作废上一首的逐词层，不等新歌词 ─────────────────────────
+    //
+    // 真机症状（PL / MXM / AMLL 三个源都能复现）：切歌后到新词到达之间，卡片与全屏的壳
+    // 已经换成新歌，而我们的层还挂着**上一首的行模型** —— 就是"预览歌词显示上一首歌的
+    // 逐词歌词"。根因是 `currentLyricsVersion` 随**歌词数据**自增，"歌换了"在那一层里不可见。
+    //
+    // 用请求里的曲目 id 当切歌信号最可靠：歌词请求是**每首歌都会来一次**的（客户端
+    // 缓存命中时不一定，那条路由 `AppleMusicLyricsOverlayHost` 里的 `hasForeignLineModel`
+    // 每帧兜住）。命中即清 —— `resetWordByWordLyrics` 会摘掉新旧两层并把 dto 清空，
+    // 于是看门狗的 `hasUsableLineLevelData` 判据也为假，不会拿旧数据把层挂回来。
+    let requestedTrackId = track.trackIdentifier ?? ""
+    if !requestedTrackId.isEmpty, requestedTrackId != lyricsLayerTrackId {
+        let isTrackSwitch = lyricsLayerTrackId != nil
+        lyricsLayerTrackId = requestedTrackId
+        if isTrackSwitch {
+            resetWordByWordLyrics(reason: "track changed (\(requestedTrackId))")
+        }
+    }
 
     if !trackIdentifier.isEmpty && !originalPath.contains(trackIdentifier) {
         throw LyricsError.trackMismatch

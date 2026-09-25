@@ -497,6 +497,39 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 18. 第七轮：切歌瞬间"预览显示上一首逐词歌词"（PL / MXM / AMLL 三个源都能复现）
+
+**症状**：切歌后，预览（卡片）里显示的是**上一首歌**的逐词歌词；窗口长度 ≈ 取词耗时 ——
+PL / MXM 是两次请求、AMLL 要先取 TTML，所以三个源都明显。**与来源无关**这一点本身就说明
+问题不在任何仓库里。
+
+**根因**：我们这层的行模型只在 `currentLyricsVersion` 变化后重建，而那个版本号是随
+**歌词数据**自增的 —— 切歌到新词到达之间，"歌换了"在我们这层里**根本不可见**；
+此时卡片/全屏的壳可能已经换成新歌，我们却把上一首的行模型盖在上面。
+
+**修复（两层，互相兜底）**：
+
+1. **尽早清**（`CustomLyrics.x.swift` → `getLyricsDataForCurrentTrack`）：
+   用曲目 id 当切歌信号，命中即 `resetWordByWordLyrics(reason: "track changed (<id>)")` ——
+   该方法会摘掉新旧两层 + 清空 dto，看门狗的行级判据随之变假，**不会**拿旧数据把层挂回来。
+   日志：`[Lyrics] track changed (<id>) — clearing word-by-word layer`。
+2. **渲染前兜底**（`AppleMusicLyricsOverlay.swift`）：行模型带上曲目 id
+   （`currentModelTrackId`，重建模型时记下），`update()` 与**每帧** `tick()` 都比对当前播放曲目，
+   不是这一首就 `detach()`（`hasForeignLineModel`）。这条兜住"客户端缓存命中、根本没有新请求"
+   那种情况；`update()` 里也拒绝重挂，所以不会与看门狗形成 1.5s 的闪烁循环。
+   日志：`[AppleMusicLyrics] line model belongs to another track — detaching`。
+
+**注意一个既有守卫**（所以不会出现"把 A 的词当成 B 的"）：`getLyricsDataForCurrentTrack` 里本来
+就有 `trackMismatch` 检查 —— 迟到的旧曲目响应会被判 mismatch、**不写入 dto**（改交占位），
+因此"上一首的 dto 被盖上当前曲目的 id"这条路不存在。
+
+**设计取舍**：间隙期我们**什么都不画**，露出来的是原生层（Spotify 渲染我们注入的 payload）——
+它的内容是正确的，比挂一份别人的行模型好；新词一到（版本号自增）AM 层立刻回来。
+
+**未验证**：无编译验证、无真机验证。
+
+---
+
 ## 17. 第六轮：全屏"小概率逐行" + 退出后"永久逐行"（PL 源 + AM 层）
 
 先说架构（用户提问确认过）：AM 层是**覆盖层** —— 自己一条 `UIHostingController` 视图挂到

@@ -303,6 +303,13 @@ final class AppleMusicLyricsOverlayHost {
     /// 换歌时要跟着变的壳文本。
     private var currentTrackTitle: String = ""
     private var currentTrackArtist: String = ""
+    /// 这份行模型**属于哪首歌**（`SPTPlayerTrack.trackIdentifier`，重建行模型时记下）。
+    ///
+    /// 为什么要它：`currentLines` 只在 `currentLyricsVersion` 变化后重建，而那个版本号是随
+    /// **歌词数据**自增的 —— 切歌到新词到达之间，模型还是上一首的，挂上去就是
+    /// "预览歌词显示上一首歌的逐词歌词"（PL / MXM / AMLL 三个源都能复现：窗口长度＝取词耗时，
+    /// 两次请求的源更明显）。有了它就能在**渲染前**判断"这份模型是不是当前这首歌的"。
+    private var currentModelTrackId: String = ""
 
     private init() {}
 
@@ -337,6 +344,16 @@ final class AppleMusicLyricsOverlayHost {
         solidBackdrop: Bool = false,
         previewHeaderInset: CGFloat = 0
     ) {
+        // ⚠️ 行模型属于**别的**曲目（切歌了、而新歌词还没到）→ 什么都不挂。
+        //
+        // 这是"预览歌词显示上一首歌的逐词歌词"的直接修复：露出来的原生层
+        // （Spotify 渲染我们注入的那份 payload）内容是正确的，比挂一份别人的行模型好。
+        // 新歌词到达后版本号会变，`update` 会重建模型并记下新的曲目 id，自然恢复。
+        if hasForeignLineModel {
+            detach()
+            return
+        }
+
         // 数据变了就重建行模型（换歌 / 重新取词）。
         let lyricsChanged = currentVersion != currentLyricsVersion
         if lyricsChanged {
@@ -515,11 +532,28 @@ final class AppleMusicLyricsOverlayHost {
     /// 直接问播放器拿，和手机其他界面显示的一致。
     private func refreshShellMetadata() {
         let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
+        // 行模型与壳文本一起对齐：这一份模型从此就"属于"这首歌（见 `hasForeignLineModel`）。
+        currentModelTrackId = track?.trackIdentifier ?? ""
         currentTrackTitle = track?.trackTitle() ?? ""
         currentTrackArtist = (EeveeSpotify.hookTarget == .lastAvailableiOS14
             ? track?.artistTitle()
             : track?.artistName()) ?? ""
         writeDebugLog("[Shell] metadata \"\(currentTrackTitle)\" — \"\(currentTrackArtist)\"")
+    }
+
+    /// 当前播放器的曲目 id。判据两侧必须取自**同一个来源**。
+    private func liveTrackId() -> String {
+        (statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack)?
+            .trackIdentifier ?? ""
+    }
+
+    /// 行模型是不是"**别的**曲目"的。
+    ///
+    /// 任一侧为空时返回 false —— 拿不到 id 的时候不该把层摘掉（宁可不动，也不误伤）。
+    private var hasForeignLineModel: Bool {
+        let live = liveTrackId()
+        guard !currentModelTrackId.isEmpty, !live.isEmpty else { return false }
+        return currentModelTrackId != live
     }
 
     // MARK: 为什么不"接管"原生视图
@@ -542,6 +576,16 @@ final class AppleMusicLyricsOverlayHost {
     /// 避免新层自带时钟与主时钟错拍。
     func tick(ms: Double) {
         guard hostView != nil, !currentLines.isEmpty else { return }
+        // 行模型已经不是当前这首歌的了（切歌、而新歌词还没到）→ **立刻收掉**。
+        //
+        // 必须每帧判：切歌不一定伴随新的歌词请求（客户端可能直接吃自己那份缓存），
+        // 所以只靠"请求到达时清理"会漏。收掉之后露出来的原生层内容是正确的。
+        // 新歌词到达时 `update()` 会重建模型并重新挂上，所以这不是永久降级。
+        if hasForeignLineModel {
+            writeDebugLog("[AppleMusicLyrics] line model belongs to another track — detaching")
+            detach()
+            return
+        }
         // ⚠️ "每帧置于最前"这件事**只能在这里做**。
         //
         // `update()` 里那句 `bringSubviewToFront` 只在挂载/刷新时才跑，而预览卡片里的
