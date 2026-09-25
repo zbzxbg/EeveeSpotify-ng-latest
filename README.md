@@ -21,8 +21,7 @@ Versions under development are not made publicly available to users.
 ##  Notice
 
 - Verified environment: iPhone 11 · iOS 27.0 · certificate-signed build · LCSign · rootless DEB.
-- No IPA package is provided.
-- Since this repository is based on EeveeSpotify-ng and EeveeSpotifyReincarnated, any enhanced features in this repository will not be detailed here. Those who need them can check EeveeSpotify-ng.
+
 
 ##  Acknowledgements
 
