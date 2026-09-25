@@ -10,34 +10,22 @@ When tested using Spotify version 9.1.86, the preview lyrics module for each son
 | Current development version | v1.0.0-beta.19 (Spotify 9.1.86) |
 | Development version last updated | 2026/09/25 |
 
-
+##  Modifications
 
 - Added three additional lyrics sources: NetEase, SpicyLyrics, and AMLL.
 - Implemented word-by-word lyrics.
 - Various other modifications and improvements.
 
-
-
-## ⚠️ Notice
+##  Notice
 
 - Verified environment: iPhone 11 · iOS 27.0 · certificate-signed build · LCSign · rootless DEB.
 - No IPA package is provided.
 - Since this repository is based on EeveeSpotify-ng and EeveeSpotifyReincarnated, any enhanced features in this repository will not be detailed here. Those who need them can check EeveeSpotify-ng.
 
+##  Acknowledgements
 
-Thanks to whoeevee for the original EeveeSpotify project.
-Thanks to SideloadLabs for creating the SpicyLyrics lyrics provider, as well as the logging and export functionality. The relevant code has been modified to fit this project.
-Thanks to the MeloX project for the inspiration behind this project's karaoke lyrics feature. The relevant code has been modified to fit this project.
+- Thanks to [whoeevee](https://github.com/whoeevee) for the original EeveeSpotify project.
+- Thanks to [SideloadLabs](https://github.com/SideloadLabs/EeveeSpotifyReincarnated) for creating the SpicyLyrics lyrics provider, as well as the logging and export functionality. The relevant code has been modified to fit this project.
+- Thanks to the [MeloX](https://github.com/youshen2/MeloX) project for the inspiration behind this project's karaoke lyrics feature. The relevant code has been modified to fit this project.
 
-
-
-
-
-
-
-
-
-
-
-
-
+---
