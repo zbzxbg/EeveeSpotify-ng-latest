@@ -13,6 +13,21 @@ private let geniusLyricsRepository = GeniusLyricsRepository()
 private let petitLyricsRepository = PetitLyricsRepository()
 private let amllTtmlLyricsRepository = AmllTtmlLyricsRepository.shared
 
+/// 「这一次我们向哪个源要的歌词」——**失败**时占位 payload 的署名要用它。
+///
+/// 背景（真机反馈 2026-09-25，日志 27）：占位 payload（"未找到歌词"）以前把
+/// `providedBy` 写死成 `"EeveeSpotify"`，于是 Spotify 原生歌词页底部那行变成
+/// `歌词提供者：EeveeSpotify` —— "是哪个源没找到"这条信息丢了。
+/// 正常路径（`LyricsDto.toSpotifyLyricsData(source:)`）一直写的是
+/// `"<源> (EeveeSpotify)"`，占位这条路必须和它一致。
+///
+/// 放在文件作用域而不是 `CustomLyrics` 里：`unavailableLyricsBytes` 是文件作用域函数
+/// （URLSession 钩子的兜底路径），它也要读同一个值。
+///
+/// ⚠️ 只在 `requestSingleSource` 入口写一次 —— 那正是"我们向某个源发出请求"的时刻，
+/// 与失败发生在哪个源**必然**同源。写在成功路径会漏掉"源直接抛错"这一路。
+private var lastRequestedLyricsSourceDescription: String = ""
+
 // 已移除：`forcedGoodLines` / `forcedGoodDto()`（配合 `forcedLyricsPayload` 排障开关）。
 //
 // 保留结论、不留代码：那次实验证明了 **卡片（与「关于艺人」并列那块）是被我们注入的
@@ -235,6 +250,10 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             ? geniusLyricsRepository
             : lyricsRepository(for: source)
 
+        // 记下"这一次问的是谁"：失败时占位 payload 的 `providedBy` 要用
+        // （见文件作用域那个全局的说明）。
+        lastRequestedLyricsSourceDescription = source.description
+
         do {
             return SourceLyricsResult(
                 dto: try repository.getLyrics(searchQuery, options: options),
@@ -399,8 +418,20 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                 // 合成过时间轴 → 如实声明；否则保持旧的"无时间轴"语义。
                 $0.timeSynchronized = placeholderLines.contains { ($0.offsetMs ?? 0) > 0 }
                 $0.restriction = .unrestricted
-                // 署名是我们自己：界面上那一行来源不会再写成别人的品牌。
-                $0.providedBy = "EeveeSpotify"
+                // 署名：**谁被问了就署谁**（形如 `"NetEase (EeveeSpotify)"`），与正常路径
+                // `LyricsDto.toSpotifyLyricsData(source:)` 的写法完全一致。
+                //
+                // ⚠️ 以前这里写死 `"EeveeSpotify"`。Spotify 原生歌词页/卡片底部那行
+                // provider 是直接照 payload 的 `providedBy` 显示的（见本文件开头那段
+                // `forcedLyricsPayload` 的结论），于是取不到词时用户看到的是
+                // `歌词提供者：EeveeSpotify` —— 看起来像"歌词源设置没生效"。
+                // 真机反馈 2026-09-25（日志 27，NetEase `No usable lyrics` → 占位）就是要
+                // 它显示成 `歌词提供者：NetEase (EeveeSpotify)`。
+                //
+                // 兜底：还没问过任何源（首次启动、或走 URLSession 兜底那条路）时保持旧写法。
+                $0.providedBy = lastRequestedLyricsSourceDescription.isEmpty
+                    ? "EeveeSpotify"
+                    : "\(lastRequestedLyricsSourceDescription) (EeveeSpotify)"
                 $0.lines = placeholderLines.map { line in
                     LyricsLine.with {
                         $0.content = line.content

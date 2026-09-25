@@ -497,6 +497,69 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 31. 日志 27 的两件事：占位署名、AM 全屏进度条拖不动（2026-09-25）
+
+### 31.1 取不到词时，`歌词提供者` 只剩 "EeveeSpotify"
+
+日志 27 的现场（`FLUXXWAVE / AKXNESHIVA`）：
+
+```
+[Lyrics] Single source: NetEase
+[NetEase] No usable lyrics
+[Lyrics] NetEase failed: 未找到歌曲
+[Lyrics] official lyrics hidden — serving our placeholder
+```
+
+占位 payload 把 `providedBy` **写死**成 `"EeveeSpotify"`（`CustomLyrics.makeUnavailableLyrics`），
+而 Spotify 原生歌词页/卡片底部那行 provider 是**直接照 payload 的 `providedBy` 显示**的
+（证据：本文件开头那段 `forcedLyricsPayload` 实验 —— 卡片底部显示的就是我们写死的名字）。
+于是用户看到 `歌词提供者：EeveeSpotify`，像是"歌词源设置没生效"。
+
+改法：新增文件作用域 `lastRequestedLyricsSourceDescription`，在 `requestSingleSource` 入口
+写一次（"这一次我们问的是谁"），占位署名改成和正常路径
+（`LyricsDto.toSpotifyLyricsData(source:)` 的 `"<源> (EeveeSpotify)"`）**完全一致**：
+
+```swift
+$0.providedBy = lastRequestedLyricsSourceDescription.isEmpty
+    ? "EeveeSpotify"
+    : "\(lastRequestedLyricsSourceDescription) (EeveeSpotify)"
+```
+
+日志 27 这一例没有走 Genius 兜底（没有 `falling back to Genius`），所以会显示
+`歌词提供者：NetEase (EeveeSpotify)`；如果哪天走了 Genius 兜底，署的就是 Genius ——
+与"提供者必须与正在渲染的那份数据同源"这条既有原则一致。
+
+### 31.2 AM 全屏的进度条拖不动（普通逐词能拖）
+
+两份壳用的是**同一段代码**（`AppleMusicLyricsProgressBar`）：
+· 普通逐词那条路 —— `LyricsShellFooterHost` 挂在**独立的** `UIHostingController`
+  （`LyricsShellHosts`，底部 210pt 条）上；
+· AM 那条路 —— 同一个 view 变成 `AppleMusicLyricsPage` 里的一份 `footerContent`（AnyView）。
+"一个能拖一个不能拖"说明差异在**触摸是否落到那条带上**，而它只有 4pt 轨道 / 11pt 圆点。
+
+本次改动（第一嫌疑 + 埋点）：
+
+| 改动 | 目的 |
+|---|---|
+| `contentShape(Rectangle())` → `contentShape(Rectangle().inset(by: -8))` | 命中区域上下各撑 8pt（≈27pt 高），**外观与布局完全不变** |
+| `seek bar drag began (width=…, duration=…)` | 日志里一眼看出"手势到底有没有开始" |
+| `seek bar drag ended — fraction=…, target=…s` | 手势结束了、seek 也发了 |
+| `seek bar drag ended but duration=0 — no seek issued` | **旧代码在这种情况下静默跳过 `onSeek`**：拖了没反应。这条日志专治它 |
+
+判读方式（下一次日志）：
+
+- 有 `drag began` + `drag ended … target=…s` → 手势与 seek 都正常，问题在别处（比如
+  seek 之后被播放器回写覆盖）；
+- 有 `drag began` 但只有 `duration=0` 那一条 → `AppleMusicLyricsPlaybackProjection.duration`
+  在 AM 全屏下没读到；
+- **两条都没有** → 触摸根本没到这条带上（那就要查 AM 页面里谁盖住了 footer：ScrollView 的
+  `simultaneousGesture`、`allowsHitTesting`、或干脆是另一条原生进度条"看着像我们的"）。
+
+**未验证**：没有本地编译（无 Swift 工具链），也没有真机；31.2 是"第一嫌疑 + 埋点"，
+不是已证实的根因。
+
+---
+
 ## 30. 逐行歌词不再套"逐词那套壳"：没有逐词数据就整首交还原生（2026-09-25）
 
 用户给的四张真机对照图（`C:\dsh\else\1..4.jpg`）把口径定死了：

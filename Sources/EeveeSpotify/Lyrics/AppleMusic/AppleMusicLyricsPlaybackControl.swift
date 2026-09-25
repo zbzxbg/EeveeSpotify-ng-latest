@@ -800,18 +800,47 @@ private struct AppleMusicLyricsProgressBar: View {
                     .opacity(isScrubbing ? 1 : 0.9)
             }
             .frame(height: max(trackHeight, thumbSize))
-            .contentShape(Rectangle())
+            // ⚠️ 触摸区必须比"看得见的那条线"大得多。
+            //
+            // 轨道只有 4pt、圆点 11pt，手指按不准就表现为"这条进度条拖不动"。
+            // 真机反馈（2026-09-25）：**AM 全屏**那条拖不动，而**普通逐词**那条能拖 ——
+            // 两份其实是同一段代码，差别只可能来自"手指有没有正好落在带上"。
+            // 用负 inset 把命中区域上下各撑 8pt（≈27pt 高）：**不影响布局与外观**。
+            .contentShape(Rectangle().inset(by: -8))
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .updating($isScrubbing) { _, state, _ in
                         state = true
                     }
                     .onChanged { value in
+                        // 只在第一帧记一次：之后每帧都写会把日志刷爆。
+                        if scrubbedFraction == nil {
+                            writeDebugLog(
+                                "[AppleMusicLyrics] seek bar drag began"
+                                    + " (width=\(Int(width)),"
+                                    + " duration=\(String(format: "%.1f", duration))s)"
+                            )
+                        }
                         scrubbedFraction = min(max(value.location.x / width, 0), 1)
                     }
                     .onEnded { _ in
-                        if let fraction = scrubbedFraction, duration > 0 {
-                            onSeek(fraction * duration)
+                        let fraction = scrubbedFraction
+                        if let fraction, duration > 0 {
+                            let target = fraction * duration
+                            writeDebugLog(
+                                "[AppleMusicLyrics] seek bar drag ended — fraction="
+                                    + "\(String(format: "%.2f", fraction)),"
+                                    + " target=\(String(format: "%.1f", target))s"
+                            )
+                            onSeek(target)
+                        } else {
+                            // 拖过、但一次 seek 都没发生：`duration == 0` 时旧代码会
+                            // **静默跳过** `onSeek`，表现就是"划了没反应"。
+                            // 这条日志专治它 —— 下次日志里只看这一行就能定性。
+                            writeDebugLog(
+                                "[AppleMusicLyrics] seek bar drag ended but duration=0"
+                                    + " — no seek issued"
+                            )
                         }
                         scrubbedFraction = nil
                     }
