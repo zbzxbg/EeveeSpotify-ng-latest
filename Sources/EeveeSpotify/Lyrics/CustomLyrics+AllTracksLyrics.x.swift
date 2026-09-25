@@ -157,14 +157,14 @@ enum InlineLyricsHostLocator {
         onMainThreadSync {
             // 先做便宜的判据，最后才去找宿主（找宿主可能要遍历整棵视图树）。
             guard NgzhwmSettingsViewModel.isWordByWordLyricsEnabled else { return }
-            // 没有**可用的行级数据**时查了也挂不上（`attach` 会直接返回）——
+            // 没有**可用的逐词数据**时查了也挂不上（`attach` 会直接返回）——
             // 这条判据必须与 `attach` 用的是同一个函数，省掉一次白遍历。
             //
-            // ⚠️ 是**行级**不是逐字：`attach` 已经允许"有逐行、没逐字"的歌挂上
-            // （降级成当前行整行点亮）。这里如果还用 `hasUsableWordLevelData`，
-            // 那些歌的层一旦因为卡片复用而掉下来，看门狗就永远不再把它挂回去 ——
-            // 表现是"预览卡片里的歌词有时候自己没了、再也不回来"。
-            guard hasUsableLineLevelData(currentLyricsDto) else { return }
+            // ⚠️ 2026-09-25 起判据从"行级"收回到"**逐词**"：只有逐行的歌现在整首交还
+            // Spotify 原生那页/那张卡（见 `attach` 里那一段产品规则）。看门狗再去找宿主、
+            // 再挂一次都是白费，还会把日志刷成 `attach declined`。数据升到逐词时
+            // `currentLyricsVersion` 会变，`refreshForCurrentLyrics()` 自己会重挂，不靠轮询。
+            guard hasUsableWordLevelData(currentLyricsDto) else { return }
             // 先把"标记说全屏还挂着、其实那一层已经不在任何窗口里"的**残留**清掉 ——
             // 否则下面那道闸门会把预览层永久挡在外面（真机：全屏里点几下歌词行再退出，
             // 之后预览与后续每一首都退化成逐行/原生，重启才恢复）。

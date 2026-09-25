@@ -21,8 +21,8 @@ import Foundation
 ///
 /// ── 边界（重要）──────────────────────────────────────────────────────────
 /// · 只改**注入给 Spotify 的那份 protobuf**，不改 `currentLyricsDto`。
-///   逐词 overlay 的判据（`hasUsableLineLevelData`）因此保持原样，
-///   不会因为合成时间轴而突然挂上一层"假同步"的高亮。
+///   渲染层的判据（`hasUsableWordLevelData` / `hasUsableLineLevelData`）读的还是原始 dto，
+///   所以不会因为合成时间轴而突然挂上一层"假同步"的高亮或逐词层。
 /// · 合成是**近似**的：行会按字符权重被铺在曲目时长上，位置不保证准确。
 ///   它换来的是"模块能出现"，不是"逐行对得准"。
 enum SyntheticLyricTiming {

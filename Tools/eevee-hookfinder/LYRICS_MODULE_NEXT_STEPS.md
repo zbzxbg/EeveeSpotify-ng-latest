@@ -497,6 +497,64 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 30. 逐行歌词不再套"逐词那套壳"：没有逐词数据就整首交还原生（2026-09-25）
+
+用户给的四张真机对照图（`C:\dsh\else\1..4.jpg`）把口径定死了：
+
+| 图 | 是什么 |
+|---|---|
+| 1 | 全屏**实际**：我们的旧层壳（没有原生关闭/标题，自己的进度条+三键偏低，行下还有译文） |
+| 2 | 预览卡**实际**：AM 开着 → payload 不带译文 → 原生卡上没有 文A |
+| 3 | 预览卡**想要**：原生卡（`歌词` + 文A/分享/展开；行是"唱过的变灰、当前亮、未唱暗"） |
+| 4 | 全屏**想要**：原生页（⌄ + 居中歌名/歌手 + 底部 文A/分享/… + 原生进度条/播放键） |
+
+### 之前为什么会变成图 1
+
+`WordByWordHost.attach` 的挂载判据是**行级**（`hasUsableLineLevelData`）：没有逐字、
+但有逐行时仍然由我们那层渲染（"降级档：当前行整行点亮"）。网易云一大批歌没有 yrc
+（`yrc absent → falling back to line-synced (lrc)`），整首只有行级时间轴 → 那层照样挂上
+→ 全屏就是图 1，卡片也带着我们自己的行色。
+
+### 现在：判据从"逐行"收回到"逐词"
+
+| 数据 | 「更好的逐词歌词」 | 谁在画 |
+|---|---|---|
+| 逐词 + iOS 26+ | 开 | AM 页（不变） |
+| 逐词 | 关 | 旧层逐字高亮（不变） |
+| **只有逐行 / 无时间轴** | 任意 | **Spotify 原生那页/那张卡**（新） |
+
+关键理由：行级数据**没有一行是我们非画不可的** —— 原生本来就会照 payload 的
+`offsetMs` 做逐行高亮 + 自动滚动（官方歌词就是它渲染的），罗马字也在 payload 里
+（`Applied official romaji` 直接把主页词行替换成罗马字），所以交还之后就是图 3 / 图 4，
+而且"全屏有译文"这个症状也跟着消失（AM 开时 payload 不给译文，原生页就没有译文行）。
+
+### 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `Lyrics/LyricsWordByWord.x.swift` → `attach` | 挂载 guard 从 `lineLevelUsable` 改成 `usable`；`lineLevelUsable` 降级为"只用于记账/日志" |
+| 同上 → `refreshForCurrentLyrics` | AM 分支**之后**加一道 `hasUsableWordLevelData` 提前返回（顺手 `detach()` 旧层），并打节流日志 `handing back to Spotify's native lyrics page/card — no word-level timing` |
+| 同上 → `setCurrentTime` | 撤层 guard 同步改成 `hasUsableWordLevelData`（否则会出现"attach 不挂了、早先挂上的层还在自己画"） |
+| 同上 → `configureBackdropIfNeeded` | 底色 guard 与挂载判据保持一致 |
+| 同上 → `logWordLevelJudgeOnce` | `render mode=` 只剩 `word` / `handback-to-native` 两档 |
+| `Lyrics/CustomLyrics+AllTracksLyrics.x.swift` | 看门狗（1.5s 轮询）判据改成 `hasUsableWordLevelData`：逐行的歌不再白遍历视图树、不再刷 `attach declined` |
+| `Lyrics/Models/LyricsDto.swift` → `toSpotifyLyricsData` | `suppliesTranslation` 从"看 AM 开关"改成 `!hasUsableWordLevelData(self)`：**谁在画谁负责译文** —— 我们画就不给（免得亮起点了没反应的翻译按钮），交还原生就给（原生 文A 才会出现，图 3/4） |
+
+### 注意（别改回去的点）
+
+- `hasUsableLineLevelData` **保留但只用于记账**：日志里的 `line timing 32/32 -> line-level=Y`、
+  以及 `attach` 被拒时那句 `line-level usable=…`。它**不再是任何挂载判据**。
+- 三处判据必须同口径（`attach` / `refreshForCurrentLyrics` / `setCurrentTime`+底色），
+  否则会留下"没人管但还在画"的旧层。
+- 历史反转：§20/§21 里"行级本来就该走旧层"是当时的结论，**已被这一节推翻**；
+  官方供应商那一层不用担心，它由 payload 侧的「隐藏官方歌词」兜住（写死启用）。
+- `hasUsableWordLevelData` 里带 `dto.timeSynced` 判据：源声明 `timeSynced=false` 的
+  纯文本（Genius / 占位）也走"交还原生"，与合成时间轴那条路一致。
+
+**未验证**：本机没有 Swift 工具链（shell 仍常 0xC0000142），这次改动**没有编译验证**。
+
+---
+
 ## 29. IPA 构建拆成**两个工作流文件**：no patch / patched（2026-09-25）
 
 用户原话：「把构造 patched 和 no patched 做成两个 yml 文件，而不是一个 yml」。

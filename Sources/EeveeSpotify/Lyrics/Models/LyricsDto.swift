@@ -38,8 +38,8 @@ struct LyricsDto {
         // 与占位文案同病（这就是"开了 Genius 回退反而更严重"的机制）。
         //
         // 所以在**交给 Spotify 的这唯一出口**统一补：拿不到时间轴就按曲目时长铺一层。
-        // ⚠️ 只改这份 protobuf：`currentLyricsDto` 与逐词 overlay 的判据
-        // （`hasUsableLineLevelData`）都读原始 dto，不受影响。
+        // ⚠️ 只改这份 protobuf：`currentLyricsDto` 与渲染层的判据
+        // （`hasUsableWordLevelData` / `hasUsableLineLevelData`）都读原始 dto，不受影响。
         // 触发条件用 `hasAnyLineTiming`（**一行都没有**才补），而不是 50% 阈值：
         // 源只要给了真实时间轴，哪怕只有零星几行（坏 LRC），也不该用估算值覆盖它 ——
         // 那会把"部分准确"变成"全部不准确"。50% 阈值那个口径留给渲染层判据用。
@@ -113,20 +113,25 @@ struct LyricsDto {
             }
         }
         
-        // 「更好的逐词歌词」开启时不把译文交给 Spotify。
+        // 谁在画，谁负责译文（2026-09-25 定的口径）。
         //
-        // 原因：Spotify 看到注入数据里有 translation，就会在「歌词」标题栏亮起
-        // 翻译按钮（和分享/展开并排那个）。而 Apple Music 渲染层自己并不显示译文，
-        // 那个按钮点下去什么都不会变，纯属误导。
+        //   · **有逐词数据** → 我们自己画（AM 页 / 旧层卡拉OK）→ **不把译文交给 Spotify**。
+        //     原因：Spotify 只要看到注入数据里有 translation，就会在「歌词」标题栏亮起
+        //     它自己的翻译按钮（和分享/展开并排那个）。而我们那两套渲染器都不靠它显示译文
+        //     （卡拉OK层自己画译文行），按钮点下去什么都不会变，纯属误导。
+        //   · **没有逐词数据**（只有逐行 / 连时间轴都没有）→ 我们一层都不挂，
+        //     整首交给 Spotify 原生那页/那张卡 → **把译文交给它**，让它自己的翻译按钮
+        //     （真机对照图里的 文A）来管译文。这样原生页/原生卡的译文行为与官方歌词一致。
         //
-        // 做法与「不展示网易云歌词翻译」完全一致：**跳过翻译层构建、不交给上游**，
-        // 而不是去隐藏 Spotify 的原生控件 —— 那样不用碰任何私有视图、没有类名
-        // 版本兼容问题，按钮是根本不会被创建。
+        // ⚠️ 以前这里是 `!isBetterWordByWordLyricsEnabled`（看开关），
+        // 于是"AM 开着 + 这首歌只有逐行"这种最常见的组合反而不给译文 ——
+        // 原生卡上连翻译按钮都不出现（真机对照图 2 与图 3 的差别就是这个）。
+        // 判据必须与 `WordByWordHost.attach` 的挂载判据一致：它挂了说明我们在画，
+        // 它没挂说明是原生在画。
         //
         // 注意：这只影响**注入给 Spotify 的那份 protobuf**。`currentLyricsDto`
-        // 里的 translation 仍然保留，所以旧 overlay 与老系统照常显示自己的译文。
-        let suppliesTranslation =
-            !NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled
+        // 里的 translation 仍然保留，所以旧层与老系统照常显示自己的译文。
+        let suppliesTranslation = !hasUsableWordLevelData(self)
 
         if let translation = translation, suppliesTranslation {
             lyricsData.translation = LyricsTranslation.with {

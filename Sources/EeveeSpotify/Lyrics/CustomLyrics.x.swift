@@ -600,7 +600,7 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     // 用请求里的曲目 id 当切歌信号最可靠：歌词请求是**每首歌都会来一次**的（客户端
     // 缓存命中时不一定，那条路由 `AppleMusicLyricsOverlayHost` 里的 `hasForeignLineModel`
     // 每帧兜住）。命中即清 —— `resetWordByWordLyrics` 会摘掉新旧两层并把 dto 清空，
-    // 于是看门狗的 `hasUsableLineLevelData` 判据也为假，不会拿旧数据把层挂回来。
+    // 于是看门狗的 `hasUsableWordLevelData` 判据也为假，不会拿旧数据把层挂回来。
     let requestedTrackId = track.trackIdentifier ?? ""
     if !requestedTrackId.isEmpty, requestedTrackId != lyricsLayerTrackId {
         let isTrackSwitch = lyricsLayerTrackId != nil
