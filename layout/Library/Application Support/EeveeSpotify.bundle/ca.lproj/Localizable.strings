@@ -1,0 +1,296 @@
+/* MARK: Settings */
+
+patching = "Modificacions";
+lyrics = "Lletres";
+customization = "Personalització";
+experiments = "Experiments";
+
+common_issues_tip_title = "Tens cap problema?";
+
+common_issues_tip_message = "Si et trobes amb cap problema, com no poder reproduir cap cançó, fes un cop d'ull a";
+common_issues_tip_button = "Problemes comuns";
+
+reset_data = "Reinicialitza les dades";
+reset_data_description = "Neteja la memòria cau i reinicia l'aplicació.";
+
+checking_for_update = "Cercant actualitzacions...";
+update_available = "Actualització disponible";
+
+restart_is_required_description = "Cal reiniciar l'aplicació per aplicar els canvis";
+
+// Patching
+
+do_not_patch_premium = "No modificar el Premium predeterminat";
+patching_description = "L'EeveeSpotify intercepta peticions de càrrega de dades de l'usuari, les deserialitza i en modifica els paràmetres en temps real.
+
+Si tens una subscripció Premium activa, pots activar l'opció «No modificar el Premium predeterminat». L'EeveeSpotify ja no modificarà les dades ni restringirà l'ús de les funcions Premium que depenen del servidor.
+
+%@";
+
+overwrite_configuration = "Sobreescriure la configuració";
+overwrite_configuration_description = "Substitueix la configuració remota amb la configuració Premium bolcada. Aquesta configuració determina la majoria de paràmetres d'experiència d'usuari i interfície i podria ser útil, tot i que pot causar problemes.";
+
+// Lyrics
+
+do_not_replace_lyrics = "No substituir les lletres";
+lyrics_source = "Font de les lletres";
+lyrics_source_description = "Pots seleccionar la font de lletres que prefereixis.
+
+Genius: Ofereix les lletres de més qualitat, té disponibles la major part de cançons i és el que actualitza més ràpidament les lletres, però no està ni mai estarà sincronitzat amb els temps de la cançó.
+
+LRCLib: És el servei més obert, ofereix lletres sincronitzades amb els temps de les cançons. No obstant, manca les lletres per moltes cançons.
+
+Musixmatch: És el servei que utilitza Spotify. Forneix lletres sincronitzades amb el temps de moltes cançons, però necessitaràs un token d'usuari per utilitzar-lo.";
+lyrics_additional_info = "Si l'EeveeSpotify no pot trobar una cançó o processar-ne la lletra, es mostrarà el missatge «No s'ha pogut carregar la lletra d'aquesta cançó». La lletra podria ser incorrecta per algunes de les cançons quan s'utilitza Genius degut al mètode que s'utilitza per trobar les cançons. He aconseguit fer-ho funcionar per la majoria de casos.";
+petitlyrics_description = "PetitLyrics: Ofereix una abundància de lletres sincronitzades amb els temps de les cançons en japonès i per algunes lletres de cançons internacionals.";
+
+musixmatch_user_token = "Token d'usuari de Musixmatch";
+user_token_placeholder = "Introdueix el token d'usuari o enganxa la informació de depuració des del portaretalls";
+
+enter_user_token = "Introdueix el token d'usuari";
+enter_user_token_message = "Per tal d'utilitzar Musixmatch, hauràs d'obtenir el teu token d'usuari des de l'aplicaió oficial. Descarrega Musixmatch de l'App Store, registra't, i ves a Configuració > Ajuda > Copiar informació de depuració, i enganxa-ho aquí. També pots extreure el token utilitzant MITM.";
+
+genius_fallback = "Fallback amb Genius";
+genius_fallback_description = "Carrega lletres de Genius si hi ha cap problema amb %@.";
+
+
+hide_lyrics_on_error = "Oculta les lletres en cas d'error";
+hide_lyrics_on_error_description = "Oculta el component de les lletres si no es poden carregar.";
+
+
+musixmatch_language = "Idioma per les lletres de Musixmatch";
+musixmatch_language_description = "Pots indicar un idioma (codi internacional d'idioma de 2 lletres) per tal que el Musixmatch mostri lletres traduïdes si es troben disponibles.";
+
+// UI
+
+lyrics_background_color_section = "Color de fons de les lletres";
+lyrics_background_color_section_description = "Si actives «Mostra colors originals», les lletres es mostraran amb es colors originals de Spotify per les cançons que en tinguin.
+
+Pots establir un color estàtic o un factor de normalització basat en el color extret de la caràtula de l'àlbum de la pista. Aquest factor determina la mesura en que els colors foscos seran il·luminats i en la que els colors clars seran enfosquits. Generalment, es veuran els colors clars amb un factor de normalització més elevat.";
+
+display_original_colors = "Mostra colors originals";
+
+use_static_color = "Utilitza color estàtic";
+static_color = "Color estàtic";
+
+color_normalization_factor = "Factor de normalització del color";
+dark_popups = "Missatges emergents foscos";
+
+// Experiments
+
+show_instagram_destination = "Mostra el destí d'Instagram";
+show_instagram_destination_description = "Mostra sempre el destí d'Instagram. %@";
+
+livecontainer_sharing = "Comparteix a LiveContainer";
+livecontainer_sharing_description = "Comparteix a LiveContainer i copia l'URL si el destí seleccionat no és compatible.";
+
+/* MARK: Premium PopUps */
+
+have_premium_popup = "Sembla que tens una subscripció Premium activa, l'EeveeSpotify no modificarà les dades ni restringirà l'ús de les funcions Premium que depenen del servidor. Això es pot modificar des de la configuració de l'EeveeSpotify.";
+
+high_audio_quality_popup = "La qualitat d'àudio molt alta depèn del servidor i no està disponible amb aquest paquet de modificacions.";
+playlist_downloading_popup = "La descàrrega nativa de llistes de reproducció depèn del servidor i no està disponible amb aquest paquet de modificacions. No obstant, pots descarregar episodis de podcasts i llistes de reproducció locals.";
+download_local_playlist = "Descarrega la llista de reproducció local";
+
+//
+
+could_not_share_popup = "No s'ha pogut compartir al destí seleccionat o LiveContainer. L'URL ha estat copiada.";
+
+/* MARK: Lyrics */
+
+
+musixmatch_unauthorized_popup = "L'EeveeSpotify no pot carregar lletres de Musixmatch a causa d'un error d'autorització. Si us plau comprova el teu token d'usuari de Musixmatch. Si utilitzes un iPad, has d'obtenir el token de l'aplicació de Musixmatch per iPad.";
+musixmatch_restricted_popup = "L'EeveeSpotify no pot carregar lletres de Musixmatch perquè estan restringides. Aquest error pot donar-se per restriccions de copyright als Estats Units; per adreces IP dels Estats Units, cal canviar el servei de lletres o emprar una VPN.";
+
+// Errors Titles
+
+no_such_song = "No s'ha trobat la cançó";
+musixmatch_restricted = "Restringit";
+invalid_musixmatch_token = "No autoritzat";
+decoding_error = "Error de descodificació";
+unknown_error = "Error desconegut";
+
+// Instrumental Titles
+
+song_is_instrumental = "Aquesta cançó és instrumental.";
+let_the_music_play = "Deixa que soni la música...";
+
+// liked songs title, should match official spotify loc
+
+liked_songs = "Cançons que m'agraden";
+
+contributors = "Contribucions";
+
+
+lrclib_api = "Adreça del servidor de LRCLib";
+
+
+// Snapshot of your benefits, should match official spotify loc
+
+ad_free_music_listening = "Escoltà música sense anuncis";
+play_songs_in_any_order = "Reprodueix cançons en qualsevol ordre";
+organize_listening_queue = "Organitza la cua de reproducció";
+
+payment_notice = "L'EeveeSpotify aplica modificacions per desbloquejar certes funcions Premium. És gratuït.";
+
+
+// Debug
+
+debug_title = "Depuració";
+export_debug_log = "Exporta l'arxiu de depuració";
+clear_debug_log = "Neteja l'arxiu de depuració";
+debug_log_cleared = "Arxiu de depuració netejat.";
+debug_log_cleared_ok = "D'acord";
+no_debug_log_found = "No s'ha trobat l'arxiu de depuració. El registre comença a gravar-se quan s'inicia l'aplicació.";
+no_debug_log_found_ok = "D'acord";
+
+/* AUTO-FILLED (untranslated) — keys that exist in en.lproj but were missing in this
+   locale. Values are the English originals (copied verbatim), so runtime behaviour is
+   English rather than a raw key name. Translate one, then move it into the matching
+   section above and delete it from this block. */
+do_not_replace_lyrics_description = "When this option is enabled, the custom lyrics feature is disabled, but Spotify is not prevented from returning its own lyrics.";
+spicylyrics_description = "SpicyLyrics: Provides word-by-word lyrics and lyrics that some other lyrics sources do not have. Visit spicylyrics.org for more details.";
+netease_description = "NetEase: Most lyrics come with timestamps. However, support for users outside mainland China is weaker, and timestamps may be misaligned.";
+amll_description = "AMLL: Provides high-quality word-by-word lyrics and rich lyrics structure. Visit amll.dev for more details.";
+Developement = "Developers";
+Localization = "Localization";
+ngzhwm_disable_lyrics_feature = "Disable Lyrics Function";
+ngzhwm_disable_lyrics_feature_description = "When this option is enabled, all features related to custom lyrics are disabled. It also prevents Spotify from returning its built-in lyrics.";
+ngzhwm_word_by_word_lyrics = "Enable Word-by-Word Lyrics";
+ngzhwm_word_by_word_lyrics_description = "Musixmatch, PetitLyrics, SpicyLyrics, NetEase, and AMLL provide word-by-word lyrics services.";
+ngzhwm_better_word_by_word_lyrics = "Better Word-by-Word Lyrics";
+ngzhwm_better_word_by_word_lyrics_description = "Just like Apple Music, requires iOS 26 at minimum. Lyric translations are not shown when enabled.";
+word_by_word_lyrics_provider = "Word-by-word Lyrics provider: %@";
+ngzhwm_multi_level_fallback = "Multi-level Fallback";
+ngzhwm_multi_level_fallback_description = "This feature does not work well on this version. Multi-level Fallback: lyrics are searched through multiple providers in this order: Musixmatch → PetitLyrics → LRCLIB → Genius. Musixmatch and PetitLyrics are given up to 5 seconds each, while LRCLIB and Genius are given up to 3 seconds each; if a provider has not returned lyrics within its time limit, the next provider is queried.";
+ngzhwm_netease_romaji_local = "Modify How NetEase Japanese Romaji Is Displayed";
+ngzhwm_netease_romaji_local_description = "For this option to take effect, \"Romanize Japanese Lyrics\" must be enabled. When this option is enabled, NetEase's Japanese romaji is handled by local Japanese romanization instead of being handed to NetEase. If NetEase returns word-by-word lyrics, this option has no effect.";
+ngzhwm_netease_hide_translation = "Hide NetEase Translation Button";
+ngzhwm_netease_hide_translation_description = "When enabled, the NetEase lyrics source will not display the lyrics translation button.";
+ngzhwm_romanization_description = "Configure romanization separately for each language. If romanization is not enabled for a language, its lyrics are displayed as-is without romanization.";
+ngzhwm_chinese_romanization = "Romanize Chinese Lyrics";
+ngzhwm_japanese_romanization = "Romanize Japanese Lyrics";
+ngzhwm_korean_romanization = "Romanize Korean Lyrics";
+ngzhwm_remove_interlude_symbol = "Delete Interlude Symbol \"♪\"";
+ngzhwm_remove_interlude_symbol_description = "When this option is enabled, the interlude symbol \"♪\" is removed from lyrics, and lines containing \"♪\" are displayed as blank.";
+ngzhwm_lyrics_unavailable = "No lyrics found";
+track_mismatch = "The track changed while lyrics were loading. Play it again to fetch lyrics.";
+enable_log_recording = "Enable Log Recording";
+enable_log_recording_description = "There's no need to enable log recording for normal use.";
+no_log_to_clear = "There's no log to clear.";
+no_log_to_clear_ok = "OK";
+sponsorblock = "SponsorBlock (BETA)";
+appIcon = "App Icon";
+true_shuffle = "True Shuffle";
+true_shuffle_dec = "Blocks Spotify's free-tier Smart Shuffle from mixing recommended tracks into your queue. Shuffle stays inside the playlist. ";
+miscellaneous = "Miscellaneous";
+clean_share_links = "Clean Share Links";
+clean_share_links_description = "Removes the \"si\" tracking parameter from shared Spotify links, so they don't reveal which device or account the link came from.";
+resetButtonTitle = "Full Reset";
+resetSubtitle = "Each is independent.";
+resetFooter = "Force re-login. Wipes Spotify keychain entries, sandbox dirs, and app-group containers. Other sideloaded apps untouched. App exits when done.";
+eevee_inline_subtitle_text = "Patching, lyrics, customization, and experiments";
+appIconTitle = "Choose Icon";
+appIconSubtitle = "iOS shows a confirmation the first time. The home screen may take a few seconds to refresh.";
+iconSelected = "Selected";
+iconTapToApply = "Tap to apply";
+prettifyIconNames = "Prettify Icon Names";
+prettifyIconNamesDescription = "Converts underscores, hyphens, and camelCase into spaces";
+categoryOneFooter = "Skips community-marked segments in podcast episodes.";
+enableSponsorblock = "Enable SponsorBlock";
+showColoredOverlay = "Show colored overlay on progress bar";
+showToast = "Show toast when skipping";
+skipToast = "Skip-toast action buttons (vote / undo / hide)";
+respectManualSeek = "Respect manual seek (don't re-skip)";
+categoriesHeader = "Categories";
+categoriesFooter = "Off · Show · Manual · Auto. Tap the color circle to change.";
+sponsor_category = "Sponsor";
+selfpromo_category = "Unpaid/Self Promotion";
+interaction_category = "Interaction Reminder";
+intro_category = "Intermission/Intro";
+outro_category = "Outro/Credits";
+preview_category = "Preview/Recap";
+hook_category = "Hook/Greetings";
+filler_category = "Tangent/Filler";
+exclusive_access_category = "Exclusive Access";
+action_disabled = "Off";
+action_show = "Show";
+action_manual = "Manual";
+action_auto = "Auto";
+draftsTitle = "Reporting & drafts";
+errorNoPodcats = "No podcast is currently playing.";
+markSegment = "Mark segment for current episode";
+advancedTitle = "Advanced";
+howToUseTitle = "How to use";
+creditsTitle = "Credits";
+creditsSubtitle = "Segment data from the SponsorBlock community (sponsor.ajay.app). Integration ported from Spot-SponsorBlock-Extension by Spot-SponsorBlock.";
+linkButtonTitle = "Spot-SponsorBlock-Extension on GitHub";
+sponsorblock_reports_title = "SponsorBlock Reports";
+sponsorblockIDTitle = "Your SponsorBlock ID";
+sponsorblockIDFooter = "Used to attribute your submissions and votes. Treat as a private password — don't share it.";
+copyButton = "Copy";
+regenerateButton = "Regenerate";
+draftsTitleSB = "Drafts";
+draftsEmpty = "No drafts. Long-press the podcast progress bar to start marking a segment.";
+hidden_locally_header = "Hidden locally (%@)";
+hiddenFooter = "Segments here are never auto-skipped on this device. They still exist on the SponsorBlock server.";
+hiddenSegmentsEmpty = "No hidden segments.";
+unhideButton = "Unhide";
+popUpRegenerateTitle = "Regenerate user ID?";
+popUpRegenerateSubtitle = "Your existing submissions and votes will no longer be linked to you.";
+popUpClearAllButton = "Clear all";
+popUpClearAllTitle = "Clear all hidden segments?";
+popUpClearAllSubtitle = "They will skip again according to your category rules.";
+readyButton = "Ready";
+incompleteButton = "Incomplete";
+editSubmit = "Edit / Submit";
+discardButton = "Discard";
+skipBehaviourTitle = "Skipping behavior";
+autoSkipSubmissionsTitle = "Auto-skip my own submissions";
+logOnlyToggle = "Log only (don't actually seek)";
+serverHeader = "Server";
+urlText = "URL";
+tuningTitle = "Tuning";
+minSegmentDuration = "Min segment duration: %.1fs";
+toastDuration = "Toast duration: %.1fs";
+trackLogSubtitle = "Dumps podcast track metadata (URI, isPodcast, isVideo, etc.) to the debug log on each new track. Enable only when SponsorBlock isn't detecting a podcast you expect.";
+trackLogToggle = "Diagnostic track log";
+resetButtonTrackLog = "Reset…";
+resetTitle = "Reset what?";
+allResetSB = "Everything (all of the above)";
+regenerateIDSB = "Regenerate user ID";
+localSubmissionsSB = "My local submissions (%@)";
+votedRecordsSB = "Voted records (%@)";
+hiddenSegmentsSB = "Hidden segments (%@)";
+draftsCountSB = "Draft (%@)";
+settingsResetSB = "Settings (toggles + categories + colors)";
+playerGesturesTitle = "Gestures on the player";
+gesturesTitle1 = "Long-press the progress bar";
+gesturesDeps1 = "Mark a segment start. Long-press again at the end of the segment to set END and open the submission form.";
+gesturesTitle2 = "Tap a segment on the bar";
+gesturesDeps2 = "Vote, change category, or hide a segment on this device only.";
+submittingTitle = "Submitting";
+submittingSectionTitle1 = "Submission form";
+submittingSectionDeps1 = "Sliders + nudge buttons fine-tune start/end. Pick a category. Submit posts to sponsor.ajay.app.";
+submittingSectionTitle2 = "Your local submissions";
+submittingSectionDeps2 = "Auto-skipped on this device immediately. Voting unlocks once the server publishes them. The 'MINE' badge marks them.";
+skipToastTitle = "Skip toast";
+skipToastSectionTitle1 = "Undo";
+skipToastSectionDeps1 = "Seeks back to segment start. The segment plays through this once. Forward + back resets it so it re-skips.";
+skipToastSectionTitle2 = "Upvote / Downvote";
+skipToastSectionDeps2 = "👍 records your vote on the server. 👎 opens a menu to downvote, hide locally, or change category.";
+skipToastSectionTitle3 = "Full segment menu";
+skipToastSectionDeps3 = "Same options as tapping the segment on the progress bar.";
+managingSegmentsTitle = "Managing segments";
+managingSegmentsSectionTitle1 = "Manage segments…";
+managingSegmentsSectionDeps1 = "Long-press the bar → 'Manage segments' lists every segment for the current episode. Vote, hide, change category, or tap a row to jump the player.";
+managingSegmentsSectionTitle2 = "Reporting & drafts";
+managingSegmentsSectionDeps2 = "Settings → 'Reporting & drafts' holds your in-progress drafts (unfinished marks) and your hidden segments. Drafts persist across launches.";
+categoriesTitle = "Categories";
+categoriesSectionTitle1 = "Per-category actions";
+categoriesSectionDeps1 = "Off = ignore. Show = draw on the bar only. Manual = prompt before skipping. Auto = skip silently.";
+OK = "OK";
+Cancel = "Cancel";
+Done = "Done";
+Loading = "Loading";
+episode_header = "Episode %@";

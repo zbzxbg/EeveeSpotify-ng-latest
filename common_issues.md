@@ -91,3 +91,22 @@ You may see ads on the home screen. This is a known issue and will not be fixed,
 
 You may see ads in podcasts. This is Spotify's default behavior, even on Premium accounts. This won't be fixed - just skip the ads manually.
 
+## App Closes Immediately After Installing a Self-Built IPA
+
+If you build the IPA yourself, do **not** take the dylib out of the jailbreak package (the
+rootless or rootHide `.deb`) and inject that. Those builds link against `libroot` /
+`libroothide`, which live under `/var/jb` — a path that does not exist on TrollStore or
+sideloaded devices. It is a **load-time** dependency, so the app is killed by dyld before
+any tweak code runs and you only get a bare `dlerror` in the crash log.
+
+Build the package for IPA injection with the jailbreak paths disabled instead:
+
+```sh
+THEOS_PACKAGE_SCHEME=rootless NO_JBROOT=1 make package FINALPACKAGE=1
+```
+
+`build-ipa-local.sh` and the IPA workflow already pass `NO_JBROOT=1`, and CI fails the build
+if the resulting dylib still references `libroot`, `libroothide` or `/var/jb`. A package
+built this way is **not** meant for jailbroken devices — install the normal `.deb` there.
+
+

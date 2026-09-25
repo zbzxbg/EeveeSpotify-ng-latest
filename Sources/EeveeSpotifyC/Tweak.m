@@ -3,14 +3,23 @@
 #import <objc/message.h>
 #import "Tweak.h"
 
-#if THEOS_PACKAGE_SCHEME_ROOTHIDE
+// NO_JBROOT（Makefile: NO_JBROOT=1）给 IPA / TrollStore 用：不导入 libroot.h，
+// 于是也不会链上 /var/jb/usr/lib/libroot.dylib。这很关键 —— libroot 是加载期
+// 依赖，TrollStore 设备上没有 /var/jb，dyld 一失败整个 App 就起不来。
+#if NO_JBROOT
+// 故意什么都不导入。
+#elif THEOS_PACKAGE_SCHEME_ROOTHIDE
 #import <roothide.h>
 #else
 #import <libroot.h>
 #endif
 
 NSString *EeveeJBRootPath(NSString *path) {
-#if THEOS_PACKAGE_SCHEME_ROOTHIDE
+#if NO_JBROOT
+    // 无越狱环境：路径本来就是对的（BundleHelper 先找 main bundle，
+    // 只有找不到时才拿这里的返回值兜底）。
+    return path;
+#elif THEOS_PACKAGE_SCHEME_ROOTHIDE
     return jbroot(path);
 #else
     return JBROOT_PATH_NSSTRING(path);

@@ -497,6 +497,154 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 29. 产物拆成两份：no patch / patched（2026-09-25）
+
+问题：GitHub 的 artifact **一定是 zip**，而工作流把 `-orion.ipa` 和
+`-orion-patched.ipa` 塞进了**同一个** artifact（`EeveeSpotify-IPA-orion`）
+→ 用户下到的是一个压缩包，里面躺着两个 ipa，还得自己分辨哪个该装。
+
+改法（CI 与本地脚本都改了）：
+
+| 文件 | artifact 名 | 内容 | 给谁 |
+|---|---|---|---|
+| `…-orion.ipa` | `EeveeSpotify-IPA-orion-nopatch` | tweak 本体：Orion + `EeveeSpotify.dylib` + bundle + `EeveeSwiftProtobuf` | 越狱 rootless 环境；或自己处理侧载兼容 |
+| `…-orion-patched.ipa` | `EeveeSpotify-IPA-orion-patched` | 上面那份 **+ LC 注入 `zxPluginsInject.dylib`**（keychain 重定向 / group container / CloudKit stub） | **TrollStore / Sideloadly / AltStore 装这个** |
+
+- 两个 artifact 各自只装**一份** IPA：下载下来仍是 zip，但里面只有 1 个 ipa。
+- 新增 `Summarize the two IPAs` 步骤把这张表写进 job summary；filebin 那步的
+  summary 也标了"哪个是哪个、装哪个"。
+- `build-ipa-local.sh`：以前是 `ipapatch --inplace` **直接改** `$OUT_IPA`，所以本地
+  永远只有 patched 一份。现在先 `cp` 成 `-patched.ipa` 再注入，两份都产出；
+  剔除 `Watch.app` 的兜底改成对两份循环（`for IPA in …`）。
+- 文件名**保持** `-orion.ipa` / `-orion-patched.ipa` 不变（不打断已有习惯和脚本），
+  "no patch" 这层区分体现在 artifact 名 + summary 上。
+
+**未验证**：照旧没有本地构建（无 Theos，shell 还经常 0xC0000142），YAML 逻辑靠肉眼检查。
+
+---
+
+## 28. IPA 不再依赖越狱路径（`NO_JBROOT=1`）：TrollStore / 侧载能装了（2026-09-25）
+
+起因：用户问「这 patched 能给巨魔/越狱用户用吗」。查下来是**不能**。
+
+### 问题
+
+IPA 里 `Payload/Spotify.app/Frameworks/EeveeSpotify.dylib` 的来源是：
+
+```
+THEOS_PACKAGE_SCHEME=rootless make package FINALPACKAGE=1   # 旧的 IPA 构建
+  └─ Makefile 走 else 分支 → EeveeSpotify_LDFLAGS += -lroot
+       └─ dylib 的 LC_LOAD_DYLIB 里多一条 /var/jb/usr/lib/libroot.dylib
+```
+
+libroot 是**加载期**依赖，不是运行时才用：dyld 在 `dlopen` 这个 dylib 时就要解析它。
+而 TrollStore / 侧载设备上根本没有 `/var/jb`（那是越狱方案的路径前缀），于是
+`dlopen` 失败、App 直接起不来 —— 日志里往往只剩一句 dlerror。
+
+工作流里没有任何一步把 libroot 塞进 IPA（只注入 dylib / bundle / framework /
+Orion），所以「rootless deb 掏出来的 dylib 直接用在非越狱设备上」这个组合必挂。
+
+| 目标设备 | 旧的 orion IPA | 说明 |
+|---|---|---|
+| rootless 越狱 | ✅ | 有 `/var/jb`，但装 deb 更合适 |
+| RootHide 越狱 | ⚠️ | 需要 `-roothide.deb`；IPA 里链的是 libroot，与 roothide 环境不匹配 |
+| TrollStore（无越狱） | ❌ | 没有 `/var/jb` → 加载期就挂 |
+| 侧载（Sideloadly/AltStore，无越狱） | ❌ | 同上 |
+
+### 修法：构建期关掉越狱路径（方案 B）
+
+选 B（构建期不链 libroot）而不是 A（把 libroot.dylib 一起塞进 IPA 再
+`install_name_tool -change`）：libroot 会把路径解析成 `/var/jb/...`，在一个
+没有越狱的沙盒里那是**错的答案**，等于带进去一个必然出错的依赖；而
+`EeveeJBRootPath()` 的调用点本来就带兜底（`BundleHelper` 先找 main bundle）。
+
+三处改动：
+
+| 文件 | 改动 |
+|---|---|
+| `Makefile` | 新增 `NO_JBROOT ?= 0`；`ifeq ($(NO_JBROOT),1)` 时**不加** `-lroot`、改加 `EeveeSpotify_CFLAGS += -DNO_JBROOT`；roothide 分支同理不参与 |
+| `Sources/EeveeSpotifyC/Tweak.m` | `#if NO_JBROOT` 时不 `#import <libroot.h>`，`EeveeJBRootPath()` 原样 `return path` |
+| `.github/workflows/build-ipa-with-orion.yml` | 构建步骤带 `NO_JBROOT=1`；verify 步骤加断言 `otool -L "$DY" \| grep -Ei 'libroot\|roothide\|/var/jb\|\.jbroot'` → **命中就 fail** |
+| `build-ipa-local.sh` | 同样带 `NO_JBROOT=1`（本地脚本版） |
+
+关键点：这份 deb **只当 dylib 的来源、不发布**（越狱包由 `builddeb.yml` 出），
+所以按无越狱模式编它没有副作用。CI 断言是防回归的：谁把 `NO_JBROOT=1` 删了/漏传，
+构建立刻红，而不是等用户装上才发现。
+
+不需要改的地方：`EeveeSwiftProtobuf.framework` 在 rootless 下的 install_name 是
+`@rpath/EeveeSwiftProtobuf.framework/EeveeSwiftProtobuf`（见
+`Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh:26`），本来就不含 `/var/jb`；
+只有 roothide 那份才是 `@loader_path/.jbroot/...`。
+
+**未验证**：本机没有 Theos / Swift 工具链（shell 还经常 0xC0000142），
+`NO_JBROOT=1` 这条构建路径没跑过；`otool` 断言只能等 CI 验证。
+
+---
+
+## 27. 第十四轮：版本检查改用 Reborn-ng 的实现（2026-09-25）
+
+来源：`C:\Users\ngzhwm\Documents\GitHub\EeveeSpotifyReborn-ng`（逐字移植）
+
+| 面向 | 旧（本仓库） | 新（Reborn-ng 那套） |
+|---|---|---|
+| 版本比较 | 按 `.` 切三段的 Int 比较 | `SemanticVersion`（SemVer：`v`/`V` 前缀、`+build` 元数据剥离、预发布标识符按数字/文本混排比较） |
+| 请求失败 | `loadVersion() async throws` + `try await`；失败后 `latestVersion` 停在 nil → **永远停在转圈** | 非抛错 + **15 秒超时**；超时 / 失败 / tag 不认识 → `latestVersion = 当前版本`（不提示更新，也不卡住） |
+| 提示条件 | `isNewerVersion`（三段比较） | `latest > current`（SemVer 严格大于；预发布版不会被误判为更新） |
+| 更新链接 | 上游 `jaydenjcpy/EeveeSpotifyReincarnated/releases` | **本仓库** `zbzxbg/EeveeSpotify-ng-latest/releases` |
+| 数据源 | 上游 `repos/jaydenjcpy/…/releases/latest` | **本仓库** `repos/zbzxbg/EeveeSpotify-ng-latest/releases/latest` |
+| 日志 | 无 | `[GitHub] GET …` / `[GitHub] … -> N bytes` / `[VersionCheck] Failed to fetch latest release: …` |
+
+**有意保留的差异（本仓库这两处更好）**：
+
+- footer 仍显示 `v<version> (build <buildNumber>)`（Reborn-ng 只显示版本号）；
+- `contributors` 的 API 与 `contributors.json` 仍走构建时生成的
+  `EeveeSpotify.repoSlug` + `GeneratedConfig.branchName`（Reborn-ng 写死了仓库名和分支 `swift`）
+  —— 换分支/换 fork 不用改代码。
+
+**⚠️ 一个预期内的现象**：本仓库的 CI 只出 Actions artifacts、不建 GitHub release，
+所以 `releases/latest` 会 404 → 版本检查结论永远是"无更新"（好处是**不会再卡转圈**）。
+想让"发现可用更新"真的弹出来，需要在本仓库打一个 tag 化的 release；
+或者把 `GitHubHelper.getLatestRelease()` 的 slug 换成真正发 release 的仓库
+（那样要连同 `EeveeSettingsVersionView` 里的 `/releases` 链接一起换）。
+
+**未验证**：无编译验证（本机无 Swift 工具链）。
+
+---
+
+## 26. 迁移其它本地化（2026-09-25）：脚本已就位，等一次能跑的 shell
+
+**任务**：把 `EeveeSpotifyReincarnated\layout\...\EeveeSpotify.bundle` 里除 en / zh-CN 之外的
+**25 个 locale**（ar-EG, az, bg, ca, da, de, de-CH, es, fa, fr, hr, hu, it, ja, ko, np, pl, pt,
+pt-BR, ro, ru, tr, uk, vi, zh-TW）迁到本仓库。
+
+**为什么不能直接拷**：上游 locale 明显落后于本仓库的 `en.lproj`（例：`ja` 只有 ~100 个键，
+本仓库 en 有 230+）。直接拷会同时制造两类 **error**（`TRANSLATING.md` 与 `Tools/l10n_lint.py` 都把
+它们判为 error）：MISSING（en 有、locale 没有）与 EXTRA（locale 有、en 已删）。
+
+**做了**：`Tools/migrate_localizations.py`（新增）
+
+- **逐字保留**源 locale 的每一行（注释 / 空行 / 顺序都不动）—— 译文是人的劳动成果；
+- 删掉不在 `en.lproj` 里的键（EXTRA）；
+- 把 en 有、locale 缺的键用**英文原值**补在文件末尾 `/* AUTO-FILLED (untranslated) */` 块里
+  （MISSING；值逐字取自 en，所以运行期就是英文，不会把 key 名显示给用户），
+  以后翻译一条就把它挪到上面相应小节；
+- 写完**自检**：重新读回目标文件，确认键集与 en 完全一致、无重复键，否则退出码 1；
+- 默认**跳过已存在的目标文件**（`--force` 才覆盖）：人工翻译的成果不会被脚本冲掉。
+
+**Info.plist 不用动**：两边都只有 `CFBundleDevelopmentRegion = English`，
+iOS 会自动发现新增 `.lproj`（真机上若不出现，再把语言代码加进 `CFBundleLocalizations`）。
+
+**卡在哪**：本会话的 shell 执行器再次故障（`pwsh` 一律 `0xC0000142`，连 `cmd /c` 也起不来），
+所以脚本**没能实际运行**。需要执行（任一即可）：
+
+```bash
+python Tools/migrate_localizations.py --dry-run   # 先看报告
+python Tools/migrate_localizations.py             # 写入 25 个 locale
+python Tools/l10n_lint.py --quiet                 # 复核（迁移后应为 0 error）
+```
+
+---
+
 ## 25. 第十三轮：删除「AMLL 优先」（2026-09-25，用户："感觉没什么用"）
 
 | 位置 | 删掉的内容 |

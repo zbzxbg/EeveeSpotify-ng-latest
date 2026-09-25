@@ -49,6 +49,11 @@ class EeveeSettingsViewController: SPTPageViewController {
     }
     
     @objc func openRepositoryUrl(_ sender: UIButton) {
-        UIApplication.shared.open(URL(string: "https://github.com/jaydenjcpy/EeveeSpotifyReincarnated")!)
+        // 设置页右上角那颗「小球」（bundle 里的 `github` 图）：
+        // 指向**本仓库**，而不是上游 `jaydenjcpy/EeveeSpotifyReincarnated`。
+        //
+        // 这里刻意写死而不是用 `EeveeSpotify.repoSlug`：那颗球是"我是谁"的入口，
+        // 不该随构建机的 git remote 漂移（改名/换 fork 时容易指到别人仓库）。
+        UIApplication.shared.open(URL(string: "https://github.com/zbzxbg/EeveeSpotify-ng-latest")!)
     }
 }
