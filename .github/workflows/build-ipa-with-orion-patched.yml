@@ -1,10 +1,10 @@
-name: Build IPA — no patch (Orion.framework)
+name: Build IPA — patched (Orion.framework + zxPluginsInject)
 
-# 产物：**只有一份「无 patch」的 IPA**（tweak 本体：Orion + EeveeSpotify.dylib +
-# bundle + EeveeSwiftProtobuf）。带 zxPluginsInject 垫片的那份在兄弟文件里：
+# 产物：**只有一份「patched」的 IPA**（tweak 本体 + LC 注入 zxPluginsInject.dylib）。
+# 不带垫片的那份在兄弟文件里：
 #
-#   .github/workflows/build-ipa-with-orion.yml          ← 本文件（无 patch）
-#   .github/workflows/build-ipa-with-orion-patched.yml  → patched（多一步 ipapatch）
+#   .github/workflows/build-ipa-with-orion.yml          ← 无 patch
+#   .github/workflows/build-ipa-with-orion-patched.yml  → 本文件（patched）
 #
 # 两个文件各自独立、可以单独跑（Actions 里就是两个入口），**只有标注
 # [PATCHED 差异] 的地方不同**。⚠️ 改公共步骤（Orion 校验 / NO_JBROOT=1 / rpath
@@ -14,7 +14,7 @@ name: Build IPA — no patch (Orion.framework)
 #          .github/workflows/build-ipa-with-orion-patched.yml
 #
 # 这个工作流的唯一目的：**把 Orion.framework 显式打进 IPA**，不再依赖 cyan 的
-# extras 自动兜底。
+# extras 自动兜底，然后再叠一层侧载兼容垫片。
 #
 # ── 为什么需要它（真机日志实证）────────────────────────────────────────────
 # 原来的两个工作流（buildpatched.yml / build-and-release-yourself.yml）都是：
@@ -47,7 +47,10 @@ name: Build IPA — no patch (Orion.framework)
 #   4. **构建后断言** Orion.framework 确实出现在 IPA 的 Frameworks/ 里，
 #      否则整个 job 失败 —— 让静默失败变成显式失败；
 #   5. 检查主程序有没有 `@executable_path/Frameworks` 这个 rpath，
-#      缺了就补上并重新签名（cyan 同样会静默失败的那一步）。
+#      缺了就补上并重新签名（cyan 同样会静默失败的那一步）；
+#   6. 构建 zxPluginsInject.dylib 并 LC 注入 —— 侧载兼容垫片
+#      (keychain 重定向 / group container / CloudKit stub)。
+#      TrollStore / Sideloadly / AltStore 装**这一份**。
 
 on:
   workflow_dispatch:
@@ -102,8 +105,12 @@ jobs:
           echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
           python3 -m pip install --upgrade --break-system-packages \
               git+https://github.com/asdfzxcvbn/pyzule-rw.git
-          # [PATCHED 差异] ipapatch 只有 patched 那条路用得到，patched 版在这里
-          # 多一段：curl 它的 release 装到 /usr/local/bin 并 `--help` 自检。
+          # [PATCHED 差异] ipapatch 只有 patched 这条路用得到，所以只在本文件里装。
+          ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && SUFFIX=macos-amd64 || SUFFIX=macos-arm64
+          sudo curl -fsSL "https://github.com/asdfzxcvbn/ipapatch/releases/latest/download/ipapatch.${SUFFIX}" \
+              -o /usr/local/bin/ipapatch
+          sudo chmod +x /usr/local/bin/ipapatch
+          ipapatch --help >/dev/null
 
       - uses: levibostian/action-hide-sensitive-inputs@v1
 
@@ -180,8 +187,11 @@ jobs:
           echo "DEB_PATH=$DEB_PATH" >> $GITHUB_ENV
           echo "deb: $DEB_PATH"
 
-      # [PATCHED 差异] patched 版在这里还有一步 `Build zxPluginsInject.dylib`，
-      # 末尾再 ipapatch 注入；本文件不需要那个垫片，所以既不构建也不注入。
+      # [PATCHED 差异] 这一步只有 patched 版有。
+      - name: Build zxPluginsInject.dylib
+        run: |
+          chmod +x Tools/build-zxpi.sh
+          Tools/build-zxpi.sh
 
       - name: Download & validate vanilla IPA
         run: |
@@ -330,25 +340,41 @@ jobs:
           zip -qry "$(basename "$OUT_IPA")" Payload
           rm -rf Payload
 
-      # ── 6. 上传：本工作流只产出一份（无 patch）──────────────────────────
-      # （patched 那份由 build-ipa-with-orion-patched.yml 单独跑、单独传。）
-      - name: Upload IPA artifact (no patch)
+      # ── 6. [PATCHED 差异] LC 注入 zxPluginsInject ────────────────────────
+      # 这一步（连同上面 Build zxPluginsInject.dylib、装 ipapatch）就是本文件与
+      # build-ipa-with-orion.yml 的**全部实质差别**。
+      # zxPluginsInject = 侧载兼容垫片（keychain 重定向 / group container /
+      # CloudKit stub）；ipapatch 按 LC 注入主程序与每个 appex。
+      - name: LC-inject zxPluginsInject (patched)
+        run: |
+          set -euo pipefail
+          # 无 patch 那份留着没意义（本工作流只产出 patched），直接改名复用，
+          # 免得上传两个几乎一样的文件、又被 GitHub 打进同一个 zip。
+          PATCHED_OUT="${OUT_IPA%.ipa}-patched.ipa"
+          mv "$OUT_IPA" "$PATCHED_OUT"
+          ipapatch --input "$PATCHED_OUT" --inplace --noconfirm \
+                   --dylib packages/zxPluginsInject.dylib
+          echo "PATCHED_OUT=$PATCHED_OUT" >> $GITHUB_ENV
+          echo "patched: $PATCHED_OUT"
+
+      # ── 7. 上传：本工作流只产出一份（patched）───────────────────────────
+      - name: Upload IPA artifact (patched)
         if: ${{ inputs.upload_method == 'artifacts' || inputs.upload_method == 'both' }}
         uses: actions/upload-artifact@v4
         with:
-          name: EeveeSpotify-IPA-orion-nopatch
-          path: ${{ env.OUT_IPA }}
+          name: EeveeSpotify-IPA-orion-patched
+          path: ${{ env.PATCHED_OUT }}
           if-no-files-found: error
 
       - name: Summarize the IPA
         if: ${{ success() }}
         run: |
           {
-            echo "### 📱 本次产物：无 patch"
+            echo "### 📱 本次产物：patched"
             echo ""
             echo "| 文件 | 内容 | 说明 |"
             echo "|---|---|---|"
-            echo "| \`$(basename "$OUT_IPA")\` | tweak 本体：Orion + EeveeSpotify.dylib + bundle + EeveeSwiftProtobuf | **没有** zxPluginsInject；TrollStore / 侧载请用 patched 那个工作流的产物 |"
+            echo "| \`$(basename "$PATCHED_OUT")\` | tweak 本体（Orion + EeveeSpotify.dylib + bundle + EeveeSwiftProtobuf）**+ LC 注入 zxPluginsInject.dylib**（keychain 重定向 / group container / CloudKit stub） | **TrollStore / Sideloadly / AltStore 装这个** |"
             echo ""
             echo "不依赖越狱路径（构建带 \`NO_JBROOT=1\`，CI 已断言 dylib 里没有 \`libroot\` / \`/var/jb\`）。"
             echo "RootHide 越狱请用 roothide 那份 .deb。"
@@ -357,13 +383,13 @@ jobs:
       - name: Upload IPA to filebin.net
         if: ${{ inputs.upload_method == 'filebin' || inputs.upload_method == 'both' }}
         run: |
-          BIN="eevee-orion-nopatch-${{ github.run_id }}-${{ github.run_attempt }}"
-          FILENAME=$(basename "$OUT_IPA")
+          BIN="eevee-orion-patched-${{ github.run_id }}-${{ github.run_attempt }}"
+          FILENAME=$(basename "$PATCHED_OUT")
           curl -fsS -X POST -H "Content-Type: application/octet-stream" \
-               --data-binary "@${OUT_IPA}" \
+               --data-binary "@${PATCHED_OUT}" \
                "https://filebin.net/${BIN}/${FILENAME}" >/dev/null
           {
-            echo "### 📦 filebin.net download（无 patch）"
+            echo "### 📦 filebin.net download（patched）"
             echo ""
             echo "- **${FILENAME}:** https://filebin.net/${BIN}/${FILENAME}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> $GITHUB_STEP_SUMMARY

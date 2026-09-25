@@ -497,29 +497,36 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
-## 29. 产物拆成两份：no patch / patched（2026-09-25）
+## 29. IPA 构建拆成**两个工作流文件**：no patch / patched（2026-09-25）
 
-问题：GitHub 的 artifact **一定是 zip**，而工作流把 `-orion.ipa` 和
-`-orion-patched.ipa` 塞进了**同一个** artifact（`EeveeSpotify-IPA-orion`）
-→ 用户下到的是一个压缩包，里面躺着两个 ipa，还得自己分辨哪个该装。
+用户原话：「把构造 patched 和 no patched 做成两个 yml 文件，而不是一个 yml」。
 
-改法（CI 与本地脚本都改了）：
+| 工作流文件 | 产物 | artifact 名 |
+|---|---|---|
+| `.github/workflows/build-ipa-with-orion.yml` | `EeveeSpotify-<v>-<spot>-orion.ipa`（**无 patch**） | `EeveeSpotify-IPA-orion-nopatch` |
+| `.github/workflows/build-ipa-with-orion-patched.yml` | `EeveeSpotify-<v>-<spot>-orion-patched.ipa`（+ `zxPluginsInject`） | `EeveeSpotify-IPA-orion-patched` |
 
-| 文件 | artifact 名 | 内容 | 给谁 |
-|---|---|---|---|
-| `…-orion.ipa` | `EeveeSpotify-IPA-orion-nopatch` | tweak 本体：Orion + `EeveeSpotify.dylib` + bundle + `EeveeSwiftProtobuf` | 越狱 rootless 环境；或自己处理侧载兼容 |
-| `…-orion-patched.ipa` | `EeveeSpotify-IPA-orion-patched` | 上面那份 **+ LC 注入 `zxPluginsInject.dylib`**（keychain 重定向 / group container / CloudKit stub） | **TrollStore / Sideloadly / AltStore 装这个** |
+- 两个文件**各自独立、自包含**：Actions 里就是两个入口，点哪个只跑哪条流水线、
+  只出一个 IPA（顺便省掉一半 CI 时间）。
+- 起因：以前一个文件里出两份、还塞进**同一个** artifact —— 而 GitHub 的 artifact
+  **一定是 zip**，于是下到的是"压缩包里套两个 ipa"，还得自己分辨哪个该装。
+- 差别只有四处，全部标了 `[PATCHED 差异]` 注释，`git diff` 一眼能看清：
+  1. `Install build tools`：patched 多装 `ipapatch`；
+  2. `Build zxPluginsInject.dylib`：只有 patched 有（nopatch 不再白跑这一步）；
+  3. 末尾 `LC-inject zxPluginsInject (patched)`：`mv` 成 `-patched.ipa` 再 ipapatch；
+  4. 上传 / summary / filebin 的文件清单（各自只传自己那份）。
+- 防漂移：`diff` 这两个文件应**只**看到 name、头部注释和上面四处不同。
+- 为什么不用 `workflow_call`（可复用工作流 + 瘦调用方）：那样两个文件之间有隐藏
+  耦合，删掉/改坏一个会连带另一个；用户要的就是"两个入口 = 两条独立流水线"。
+- 产物内容（两个文件的公共部分完全一致）：tweak 本体 = Orion.framework +
+  `EeveeSpotify.dylib` + `EeveeSpotify.bundle` + `EeveeSwiftProtobuf.framework`；
+  patched 那份额外 LC 注入 `zxPluginsInject.dylib`（keychain 重定向 / group
+  container / CloudKit stub）→ **TrollStore / Sideloadly / AltStore 装 patched**。
+- `build-ipa-local.sh`（本地）保持**一次跑出两份**（`<name>.ipa` +
+  `<name>-patched.ipa`）：本地没有排队成本，一起出更省事；`Watch.app` 剔除对两份循环。
 
-- 两个 artifact 各自只装**一份** IPA：下载下来仍是 zip，但里面只有 1 个 ipa。
-- 新增 `Summarize the two IPAs` 步骤把这张表写进 job summary；filebin 那步的
-  summary 也标了"哪个是哪个、装哪个"。
-- `build-ipa-local.sh`：以前是 `ipapatch --inplace` **直接改** `$OUT_IPA`，所以本地
-  永远只有 patched 一份。现在先 `cp` 成 `-patched.ipa` 再注入，两份都产出；
-  剔除 `Watch.app` 的兜底改成对两份循环（`for IPA in …`）。
-- 文件名**保持** `-orion.ipa` / `-orion-patched.ipa` 不变（不打断已有习惯和脚本），
-  "no patch" 这层区分体现在 artifact 名 + summary 上。
-
-**未验证**：照旧没有本地构建（无 Theos，shell 还经常 0xC0000142），YAML 逻辑靠肉眼检查。
+**未验证**：照旧没有本地构建（无 Theos，shell 还经常 0xC0000142），YAML 逻辑靠肉眼检查；
+patched 那份的公共步骤是从 no-patch 那份逐行复制的。
 
 ---
 
@@ -564,7 +571,7 @@ Orion），所以「rootless deb 掏出来的 dylib 直接用在非越狱设备�
 |---|---|
 | `Makefile` | 新增 `NO_JBROOT ?= 0`；`ifeq ($(NO_JBROOT),1)` 时**不加** `-lroot`、改加 `EeveeSpotify_CFLAGS += -DNO_JBROOT`；roothide 分支同理不参与 |
 | `Sources/EeveeSpotifyC/Tweak.m` | `#if NO_JBROOT` 时不 `#import <libroot.h>`，`EeveeJBRootPath()` 原样 `return path` |
-| `.github/workflows/build-ipa-with-orion.yml` | 构建步骤带 `NO_JBROOT=1`；verify 步骤加断言 `otool -L "$DY" \| grep -Ei 'libroot\|roothide\|/var/jb\|\.jbroot'` → **命中就 fail** |
+| `.github/workflows/build-ipa-with-orion.yml` **和** `…-patched.yml` | 两个 IPA 工作流都带 `NO_JBROOT=1`；verify 步骤都加断言 `otool -L "$DY" \| grep -Ei 'libroot\|roothide\|/var/jb\|\.jbroot'` → **命中就 fail** |
 | `build-ipa-local.sh` | 同样带 `NO_JBROOT=1`（本地脚本版） |
 
 关键点：这份 deb **只当 dylib 的来源、不发布**（越狱包由 `builddeb.yml` 出），
