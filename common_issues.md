@@ -2,9 +2,7 @@ On this page, you'll find a detailed FAQ covering various topics related to Eeve
 
 # Versions and Support
 
-EeveeSpotify currently supports Spotify version **9.1.68** (the latest version compatible with iOS 16.1+). 
-
-If you are jailbroken, install the latest .deb from the [releases page](https://github.com/jaydenjcpy/EeveeSpotifyReincarnated/releases), along with the latest Spotify from the App Store. After installation, open the EeveeSpotify settings (accessible from your Spotify profile settings) and reset data so it will properly patch Premium features.
+If you are jailbroken, install the latest .deb from the [releases page](https://github.com/zbzxbg/EeveeSpotify-ng-latest), along with the latest Spotify from the App Store. After installation, open the EeveeSpotify settings (accessible from your Spotify profile settings) and reset data so it will properly patch Premium features.
 
 For non-jailbroken devices, use the patched IPA files available in the releases. You can install these using:
 - **TrollStore** (recommended for iOS 14-16.6.1, 17.0)
@@ -14,7 +12,7 @@ For non-jailbroken devices, use the patched IPA files available in the releases.
 
 EeveeSpotify only supports iOS and iPadOS and is not planned to be supported on other platforms. You can sideload the iPadOS version on an Apple Silicon Mac, though.
 
-New versions are released when compatible Spotify updates become available. Check the [releases page](https://github.com/jaydenjcpy/EeveeSpotifyReincarnated/releases) for the latest builds, or join the [Telegram channel](https://t.me/compiledipas) for IPA downloads and updates.
+New versions are released when compatible Spotify updates become available. Check the [releases page](https://github.com/zbzxbg/EeveeSpotify-ng-latest) for the latest builds, or join the [Telegram channel](https://t.me/zbzxbg) for IPA downloads and updates.
 
 ## CarPlay, Siri and Dynamic Island/Lockscreen
 
@@ -26,7 +24,7 @@ If you're using a paid certificate, to navigate to a song from the lock screen, 
 
 # Feature Requests
 
-EeveeSpotify does not accept free feature requests. If you need something, feel free to implement it yourself, or submit a pull request if you think others may find it useful. If you're willing to pay for a feature, open an issue to discuss further opportunities.
+This project accepts new feature requests (so you don't need to pay for this), but features will be added at the project's discretion.
 
 Note that many Premium features are server-sided and will never work without a Premium subscription (e.g., very high quality audio, offline downloads on mobile data).
 
@@ -77,8 +75,6 @@ However, opening a pull request is always welcome. If you are a developer and ma
 
 You may see a "Download local playlist" option. This is specifically for downloading playlists that contain only local tracks from your PC within a Wi-Fi network.
 
-Any issues regarding downloading of any kind will be closed.
-
 ## Spotify Connect
 
 When using Spotify Connect, you may encounter ads, be unable to skip tracks, and experience other limitations. The music is streamed directly from Spotify's cloud to the connected device, while your phone acts only as a remote control. This is beyond EeveeSpotify's control. If you want to avoid these limitations, use Bluetooth instead.
@@ -90,23 +86,3 @@ You may see ads on the home screen. This is a known issue and will not be fixed,
 ## Ads in Podcasts
 
 You may see ads in podcasts. This is Spotify's default behavior, even on Premium accounts. This won't be fixed - just skip the ads manually.
-
-## App Closes Immediately After Installing a Self-Built IPA
-
-If you build the IPA yourself, do **not** take the dylib out of the jailbreak package (the
-rootless or rootHide `.deb`) and inject that. Those builds link against `libroot` /
-`libroothide`, which live under `/var/jb` — a path that does not exist on TrollStore or
-sideloaded devices. It is a **load-time** dependency, so the app is killed by dyld before
-any tweak code runs and you only get a bare `dlerror` in the crash log.
-
-Build the package for IPA injection with the jailbreak paths disabled instead:
-
-```sh
-THEOS_PACKAGE_SCHEME=rootless NO_JBROOT=1 make package FINALPACKAGE=1
-```
-
-`build-ipa-local.sh` and the IPA workflow already pass `NO_JBROOT=1`, and CI fails the build
-if the resulting dylib still references `libroot`, `libroothide` or `/var/jb`. A package
-built this way is **not** meant for jailbroken devices — install the normal `.deb` there.
-
-
