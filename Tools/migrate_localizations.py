@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-把 EeveeSpotifyReincarnated 的其它本地化**迁移并升级**到本仓库。
+把上游 EeveeSpotifyReincarnated（https://github.com/SideloadLabs/EeveeSpotifyReincarnated）
+的其它本地化**迁移并升级**到本仓库。
 
 为什么不能直接拷
 ================
@@ -41,12 +42,18 @@
 """
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
+# 上游（Reincarnated）的 bundle 路径。默认给的是 Windows 上的常规克隆位置；
+# 换机器/换目录时**不要改代码**，用环境变量指定即可：
+#     EEVEESPOTIFY_UPSTREAM_BUNDLE=/path/to/.../EeveeSpotify.bundle
+# 仓库地址见文件头。见 `--help` 里的说明。
 SRC_BUNDLE = Path(
-    r"C:\Users\ngzhwm\Documents\GitHub\EeveeSpotifyReincarnated"
+    os.environ.get("EEVEESPOTIFY_UPSTREAM_BUNDLE")
+    or r"C:\Users\ngzhwm\Documents\GitHub\EeveeSpotifyReincarnated"
     r"\layout\Library\Application Support\EeveeSpotify.bundle"
 )
 DST_BUNDLE = (

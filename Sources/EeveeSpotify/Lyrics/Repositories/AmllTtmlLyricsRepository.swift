@@ -173,7 +173,7 @@ class AmllTtmlLyricsRepository: LyricsRepository {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(
-            "EeveeSpotify v\(EeveeSpotify.version) https://github.com/whoeevee/EeveeSpotify",
+            "EeveeSpotify v\(EeveeSpotify.version) https://github.com/zbzxbg/EeveeSpotify-ng-latest",
             forHTTPHeaderField: "User-Agent"
         )
 

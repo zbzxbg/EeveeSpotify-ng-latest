@@ -773,7 +773,7 @@ Orion），所以「rootless deb 掏出来的 dylib 直接用在非越狱设备�
 
 ## 27. 第十四轮：版本检查改用 Reborn-ng 的实现（2026-09-25）
 
-来源：`C:\Users\ngzhwm\Documents\GitHub\EeveeSpotifyReborn-ng`（逐字移植）
+来源：[EeveeSpotifyReborn-ng](https://github.com/zbzxbg/EeveeSpotify-ng-latest)（逐字移植）
 
 | 面向 | 旧（本仓库） | 新（Reborn-ng 那套） |
 |---|---|---|
@@ -803,7 +803,8 @@ Orion），所以「rootless deb 掏出来的 dylib 直接用在非越狱设备�
 
 ## 26. 迁移其它本地化（2026-09-25）：脚本已就位，等一次能跑的 shell
 
-**任务**：把 `EeveeSpotifyReincarnated\layout\...\EeveeSpotify.bundle` 里除 en / zh-CN 之外的
+**任务**：把上游 [SideloadLabs/EeveeSpotifyReincarnated](https://github.com/SideloadLabs/EeveeSpotifyReincarnated)
+`layout/.../EeveeSpotify.bundle` 里除 en / zh-CN 之外的
 **25 个 locale**（ar-EG, az, bg, ca, da, de, de-CH, es, fa, fr, hr, hu, it, ja, ko, np, pl, pt,
 pt-BR, ro, ru, tr, uk, vi, zh-TW）迁到本仓库。
 
