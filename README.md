@@ -4,6 +4,8 @@ This repository is independently maintained by me and is not affiliated with who
 
 When tested using Spotify version 9.1.86, the preview lyrics module for each song displayed correctly provided that the lyrics source was not set to ‘multi-level fallback’ and Genius fallback was not enabled.
 
+Versions under development are not made publicly available to users.
+
 | | Version |
 | --- | --- |
 | Latest public release | v0.1.0 （Spotify 9.1.76） |
