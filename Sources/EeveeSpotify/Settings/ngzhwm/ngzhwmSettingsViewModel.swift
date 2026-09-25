@@ -11,6 +11,7 @@ class NgzhwmSettingsViewModel: ObservableObject {
     static let amllPreferredKey = "ngzhwm_amllPreferred"
     static let hideOfficialLyricsKey = "ngzhwm_hideOfficialLyrics"
     static let syntheticLineTimingKey = "ngzhwm_syntheticLineTiming"
+    static let injectLyricsCardElementKey = "ngzhwm_injectLyricsCardElement"
     static let blurredLyricsBackdropKey = "ngzhwm_blurredLyricsBackdrop"
     static let lyricsBackdropMaterialKey = "ngzhwm_lyricsBackdropMaterial"
 
@@ -98,5 +99,19 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// 默认**开启**（可用性优先）。想复现"无时间轴"的旧行为做 A/B 对比时关掉它即可。
     static var isSyntheticLineTimingEnabled: Bool {
         bool(forKey: syntheticLineTimingKey, defaultValue: true)
+    }
+
+    /// 「给没有歌词卡片的曲目补一个卡片元素」（实验开关，默认**关闭**）。
+    ///
+    /// 背景：真机取证发现 `scrollsita/v1/scroll/spotify:track:<id>`（正在播放页的**元素列表**）
+    /// 只在"Spotify 自己有官方歌词"的曲目上多下发一个元素（内层字段号 5，只引用曲目 URI）。
+    /// 三首样本 100% 吻合，而唯一一次肉眼看到歌词卡片正是那首有多下发元素的曲目。
+    ///
+    /// 打开后，缺这一项的响应会被**补上这一项**（byte 级，只在能完整解析时动手，
+    /// 任何异常都原样放行）。见 `ScrollsitaLyricsElementInjector`。
+    ///
+    /// ⚠️ 这是**验证假设**用的开关：先按默认（关）跑一遍，再打开跑一遍，两组对比。
+    static var isLyricsCardElementInjectionEnabled: Bool {
+        bool(forKey: injectLyricsCardElementKey, defaultValue: false)
     }
 }

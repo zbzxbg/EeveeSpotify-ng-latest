@@ -286,6 +286,10 @@ enum SpotifyResponsePatcher {
                 isDAC
             ))
             || BrowsitaSectionStripper.shouldHandle(url)
+            // 只在开关打开时才把正在播放页的元素列表收下来改写（关着就零开销、
+            // 连缓冲都不做）。见 `ScrollsitaLyricsElementInjector`。
+            || (NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled
+                && ScrollsitaLyricsElementInjector.shouldHandle(url))
     }
 
     static func blockedResponseData(for url: URL) -> Data {
@@ -324,6 +328,7 @@ enum SpotifyResponsePatcher {
         case planOverview = "PlanOverview"
         case dacEmpty    = "dac"
         case casitaStrip = "casitaStrip"
+        case lyricsCardElement = "LyricsCardElement"
     }
 
     struct PatchResult {
@@ -364,6 +369,11 @@ enum SpotifyResponsePatcher {
         if url.path.lowercased().contains("/dac/view/v1/") {
             // Empty body = "no ad to render" to the DAC consumer.
             return PatchResult(data: Data(), tag: .dacEmpty)
+        }
+        if NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled,
+           ScrollsitaLyricsElementInjector.shouldHandle(url),
+           let injected = ScrollsitaLyricsElementInjector.injectIfNeeded(url: url, body: buffer) {
+            return PatchResult(data: injected, tag: .lyricsCardElement)
         }
         if BrowsitaSectionStripper.shouldHandle(url) {
             if let stripped = BrowsitaSectionStripper.strip(buffer, url: url) {

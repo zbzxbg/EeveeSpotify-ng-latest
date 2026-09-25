@@ -47,6 +47,7 @@ struct EeveeLyricsSettingsView: View {
                 hideOnErrorSection()
                 hideOfficialLyricsSection()
                 syntheticLineTimingSection()
+                injectLyricsCardElementSection()
                 romanizationSection()
                 
                 // 多级回退链路包含 Musixmatch，其语言项同样可配置。
@@ -192,6 +193,24 @@ struct EeveeLyricsSettingsView: View {
             )
         } footer: {
             Text("ngzhwm_synthetic_line_timing_description".localized)
+        }
+    }
+
+    /// 「给没有歌词卡片的曲目补一个卡片元素」（实验开关，默认**关**）。
+    ///
+    /// 见 `ScrollsitaLyricsElementInjector`：正在播放页的元素列表由 `scrollsita` 下发，
+    /// 而"这首歌有没有歌词卡片"看起来是**服务端按自己的歌词库**决定的（有词才多下发一项）。
+    /// 打开后我们会把缺的那一项补进响应里。
+    ///
+    /// 默认关是为了能对照：先关着跑一遍，再打开跑一遍，两组对比。
+    @ViewBuilder private func injectLyricsCardElementSection() -> some View {
+        Section {
+            Toggle(
+                "ngzhwm_inject_lyrics_card_element".localized,
+                isOn: $viewModel.injectLyricsCardElement
+            )
+        } footer: {
+            Text("ngzhwm_inject_lyrics_card_element_description".localized)
         }
     }
 

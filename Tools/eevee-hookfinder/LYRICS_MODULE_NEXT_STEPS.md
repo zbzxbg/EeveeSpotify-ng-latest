@@ -194,3 +194,153 @@ scrollsita 是 protobuf，元素类型极可能是**枚举整数**，字符串�
   改动均为"新增函数 + 新增日志行"，唯一的控制流改动是 `modifyAssignedValues`
   的头部多一次 `dumpLyricsFlags(values)`、尾部多一次 `reportLyricsReplacementOutcome(values)`；
 - 因此**必须由 CI/本地构建裁决**，且这三条日志要真机各跑一次才有结论。
+
+---
+
+## 7. 真机回报（2026-09-25 07:46–07:48，日志 18 + 照片 07:49）
+
+**构建已验证**：日志 18 里 §6.1/6.2/6.3 三条新日志全部出现 → 这一次的改动编译并运行通过
+（`EnumValue` 那处笔误已修；`[Flags] replacement … — N match(es)`、`[ScrollProbe] … hex…B=` 都打出来了）。
+
+### 7.1 A/B 跑了一半：ON 组有结论，OFF 组只差一张截图
+
+| 组 | 时间 | 日志证据 | 视觉结果 |
+|---|---|---|---|
+| ON | 07:46:22 启动（`synthetic line timing: ON`） | `synthetic line timing applied — 7 line(s)` → `timeSynchronized=true` | 照片：封面下**单行**歌词、「关于艺人」上方**没有**歌词卡片 |
+| OFF | 07:48:20 启动（`synthetic line timing: OFF`） | NetEase `Unsynced lyrics fallback (7 line(s))`，**没有**补时间轴 → `timeSynchronized=false`（**卡片合格 payload**） | **没有截图 → 未知** |
+
+→ OFF 组是本次 A/B 的**唯一缺口**：payload 确实按预期变成了"无时间轴"，但没人看那一刻的界面。
+
+### 7.2 `[Flags]` 首批结果：真实 scope 拿到了，"空枪"也坐实了
+
+```
+[Flags] lyrics flag — scope=ios-feature-lyrics name=enable_lyrics bool=true
+[Flags] replacement ios-feature-lyrics.enable_has_lyrics_check_bypass — 0 match(es)
+[Flags] replacement *.enable_has_lyrics_check_bypass — 0 match(es)
+```
+
+- `ios-feature-lyrics` **就是真 scope** ✔（`enable_lyrics` 1 match，`setBool` 生效）；
+- **`enable_has_lyrics_check_bypass` 服务器根本没下发**（两个 scope 都试了）→ 从 9.1.86 的 flag **表**
+  里读到名字 ≠ 服务端会赋值。这一枪是空的（FINDINGS 证据 2 的预判成立），而且**服务端不存在
+  "这首歌有没有词"这道闸** —— 到此，"服务端说了算"的最后一个变体也排除了。
+
+服务端实际下发的歌词 flag 全清单（日志 18 行 35–48），其中**唯一的 `false`**：
+
+```
+ios-feature-lyrics                          lyrics_entry_point_enabled            = false   ← 首选嫌疑
+ios-feature-lyrics                          enable_lyrics                         = true
+ios-feature-lyrics                          is_get_lyrics_v2_enabled              = true
+ios-feature-lyrics                          lyrics_offline_enabled                = true
+ios-feature-lyrics                          is_lyrics_cache_v2_enabled            = true
+ios-feature-lyrics                          lyrics_context_menu_toggle_enabled    = true
+ios-feature-lyrics                          enable_lyrics_character_count_fix     = true
+ios-nowplaying-contentlayers-impl           lyrics_under_cover_art_enabled        = true   ← 名字＝照片里那行
+ios-nowplaying-contentlayers-impl           is_lyrics_cover_art_refactor_enabled  = true
+ios-feature-canvas                          lyrics_on_canvas_enabled              = true
+ios-zephyr                                  sync_lyrics_enabled                   = true
+ios-campfire-properties-impl                chat_lyrics_sticker_request_enabled   = true
+ios-campfire-chatcontentpickerpage-impl     entity_type_lyrics_stickers_enabled   = true
+ios-campfire-properties-impl                lyrics_sticker_suggestions_enabled    = true
+```
+
+两个候选的解释力最强：
+
+1. `lyrics_entry_point_enabled = false` —— "歌词**入口**"正是与「关于艺人」并列的
+   **歌词卡片**（点进去才是全屏歌词）；服务端把它关了。**它是唯一 false，且 scope 已知**，
+   所以这一枪现在是"把已存在的值钉成 true"，不是臆造数据。
+2. `lyrics_under_cover_art_enabled = true` —— 名字与照片里那行"封面下歌词"逐字对应；
+   若卡片与它互斥，把它关掉可能换回卡片（代价是失去面 A）。
+
+### 7.3 scrollsita 解码：**先判死，又翻案（同一份数据，两次结论）**
+
+**第一版结论（错，作废）**：我拿 ON 组与 OFF 组的同一首 hex **逐字节相同**，就写下"服务端没有随
+payload 切换任何东西 ⇒ 服务器决定卡片这条假设可以判死"。
+**错在哪**：ON/OFF 是**同一首**曲目，它只能证明"服务端不随**我们的 payload** 变"，**不能**证明
+"服务端不按**曲目**下发不同元素"。该比的是**有词曲目 vs 没词曲目** —— 也就是 FINDINGS 里
+那个探针最初的设计初衷。
+
+**按正确口径重解（日志 18 三条 hex 全部解码，均为同一套 wire format）**：
+
+| 曲目 | color-lyrics | 元素列表（内层字段号 → 内容） |
+|---|---|---|
+| `7dUKNjRiLxS2OXRldCIjH4`（SECRET） | **200** | **5**（只含 `spotify:track:…`，section `…Gq21`）, 2（关于艺人）, 3（探索 MIMI）, 4（canvas + 2 artist） |
+| `5utfun3R35e5AsBalPSxBe`（最後の希望） | 404 | 2（关于艺人）, 3（探索 CYPARISS）, 4（canvas + 2 artist） |
+| `1MbA2hu0f2NCnO114X1BP6` | 404 | 2（关于艺人）, 3（探索 CYPARISS）, 4（canvas + 3 artist） |
+
+- 那个 `5` **只引用曲目 URI**（不引用艺人），并且**只在 Spotify 有官方歌词的曲目上存在**（3/3 吻合）；
+- 每个元素尾部都带自己的 `f23` = section URI，而 section 是**按元素类型固定**的
+  （`…Gq1L`=关于艺人、`…DABRtFWApcy61XJEwt`=探索、`…Gq1O`=canvas、`…Gq21`=这一项）；
+- `f2` = scroll id（UUID），只有它随会话变化。
+
+由此得到一个能解释**全部**观测的模型：
+
+```
+歌词卡片可见    ⟺  元素列表里有 5（服务端认为"这首歌我库里有词"）  AND  payload 无时间轴
+封面下单行可见  ⟺  payload 有时间轴（与元素列表无关）
+```
+
+逐条对上：
+
+- **03:50**（日志 12/13）：SECRET（有 `5`）+ 强制 placeholder（无时间轴）→ **卡片出现**，
+  且卡片上 provider 是我们自己写死的 `EeveeForce…` ⇒ 卡片**内容**来自我们替换的
+  color-lyrics，卡片**位置/存在性**来自这份元素列表；
+- **今天 OFF 组**（07:48，最後の希望，无 `5` + 无时间轴）→ **什么都没有**（用户实测）；
+- **今天 ON 组**（07:46，最後の希望，无 `5` + 有时间轴）→ 只有封面下单行。
+
+⇒ 910 那种"每首歌都有歌词卡片"在 9.1.86 上缺的正是**服务端那一项元素**，而这个响应在我们手上
+（HTTP 侧、`shouldModify` 能拦到），所以**可以补**。
+
+### 7.4 下一步
+
+1. ~~补 OFF 组截图~~ → **已由用户实测回答**：关掉「合成行级时间轴」后，单行歌词和卡片**都没有**。
+   这直接推翻 §0 的"两面互斥"推论（无时间轴 ≠ 卡片），并催生了上面的模型；
+2. 见 §8：把模型做成两个可验证的开关，先关后开跑对照。
+
+---
+
+## 8. 本轮改动（2026-09-25 白天第二轮）：把假设做成可验证的开关
+
+### 8.1 代码
+
+| 文件 | 改动 |
+|---|---|
+| `Premium/Helpers/ScrollsitaLyricsElementInjector.swift` | **新增**：byte 级往 `scrollsita/v1/scroll/spotify:track:<id>` 的响应里补一个与 SECRET **完全同形**的 `5` 元素 |
+| `Premium/Helpers/SpotifyResponsePatcher.swift` | `shouldModify` / `patch` 各加一个分支（**开关关着时零开销，连缓冲都不做**）；新增 `PatchTag.lyricsCardElement` |
+| `Settings/ngzhwm/ngzhwmSettingsViewModel.swift` | 新 key `ngzhwm_injectLyricsCardElement` + `isLyricsCardElementInjectionEnabled`（**默认 false**） |
+| `Settings/Sections/Lyrics/ViewModels/EeveeLyricsSettingsViewModel.swift` | `@Published injectLyricsCardElement`（初值走默认值 getter） |
+| `Settings/Sections/Lyrics/Views/EeveeLyricsSettingsView.swift` | 新 section `injectLyricsCardElementSection()` |
+| `en.lproj` / `zh-CN.lproj` | 两条新文案 |
+| `Premium/DynamicPremium+ModifyingFunctions.swift` | 把服务端**唯一为 false** 的歌词 flag `lyrics_entry_point_enabled` 钉成 true（scope 来自实发清单，非猜测） |
+
+注入器的安全边界（很重要：猜着改会毁掉整个正在播放页）——
+只在**缺 `5`**时追加；全程按 wire format 解析，任何一步不符合预期 → 返回 nil（**原样放行**）；
+组装完重新解析自检一遍，过不了也返回 nil。
+
+### 8.2 验证协议（先关后开，别一次动两个变量）
+
+1. **对照组 A**：开关保持默认（关）+「合成行级时间轴」也关 → 播 `最後の希望`（404 曲目）→ 记结果；
+2. **实验组 B**：打开「给没有歌词卡片的曲目补上卡片（实验）」→ **重启 App**（响应/缓存需要新会话）
+   → 同样条件再播 → 记结果；
+3. 日志里 B 组应出现 `[Scrollsita] injected lyrics-card element …`（A 组没有这一行）。
+
+| A（关） | B（开） | 结论 |
+|---|---|---|
+| 无卡片 | **有卡片** | 假设成立：卡片位置由服务端元素列表决定，注入有效 → 下一步做成默认行为 |
+| 无卡片 | 无卡片 | 注入没效果：要么 `5` 不是歌词卡片，要么客户端还要别的字段 → 下一步逐字段对比 SECRET 与注入后的响应 |
+| 有卡片 | 有卡片 | 卡片其实是 `lyrics_entry_point_enabled` 那条 flag 开的，与元素列表无关 → 回退注入器 |
+
+### 8.3 老实说
+
+- 注入器**没有编译验证**（本机无 Swift 工具链），也**没有真机验证**；
+- "`5` = 歌词卡片"仍是**推断**（3 个样本 + 一次肉眼观察），不是已证事实；
+- 因为写成了"解析不过就原样放行"，最坏情况应当是"没效果"而不是"页面坏掉"——但这一点同样没验证过。
+
+---
+
+## 9. 历史遗留（本轮作废/保留）
+
+- ~~§0 的"两个面互斥、合成时间轴把卡片挤掉"~~ → **作废**，见 §7.3/§7.4：无时间轴并不产生卡片，
+  真正决定卡片存在性的是服务端的元素列表；
+- `enable_has_lyrics_check_bypass` 那一枪**确认是空的**（服务端根本不下发这个名字，§7.2），
+  但代码里的两条 `setBool` 可以留着（无害 no-op），不必再动；
+- 启动崩溃（两份 `.ips` 同一地址）仍与歌词问题无关，真机验证前别叠加新 hook。

@@ -1,0 +1,192 @@
+import Foundation
+
+/// 往 `scrollsita/v1/scroll/spotify:track:<id>` 的响应里补一个「歌词卡片」元素。
+///
+/// ── 为什么怀疑卡片位置出自这里（2026-09-25 真机取证，日志 18）────────────────
+///
+/// 该接口按曲目返回**正在播放页的元素列表**（`关于艺人`、`探索 <artist>`、canvas …）。
+/// 同一批样本按 wire format 解出来的元素（括号里是元素的内层字段号）：
+///
+/// | 曲目 | color-lyrics | 元素 |
+/// |---|---|---|
+/// | `7dUKNjRiLxS2OXRldCIjH4`（SECRET） | **200**（Spotify 有官方词） | **5**, 2, 3, 4 |
+/// | `5utfun3R35e5AsBalPSxBe`（最後の希望） | 404 | 2, 3, 4 |
+/// | `1MbA2hu0f2NCnO114X1BP6` | 404 | 2, 3, 4 |
+///
+/// 那个多出来的 `5` **只引用曲目 URI**（不引用艺人），且只在"Spotify 有官方歌词"的曲目上
+/// 出现。而唯一一次肉眼确认看到歌词卡片（卡片上显示的 provider 是我们自己写死的
+/// `EeveeForce…`）正是 SECRET —— 也就是说：**卡片的内容**来自我们替换的 color-lyrics
+/// 响应，**卡片的位置/存在性**来自这份元素列表。
+///
+/// 这与"开关关掉后 404 曲目什么都不显示"也吻合：没有 `5` → 没有卡片；
+/// payload 无时间轴 → 连封面下那行（面 A）也没有。
+///
+/// → 假设：`5` = 歌词卡片元素，服务端只对自己库里有词的曲目下发。
+///   那就把缺的这一项**补进响应里** —— 这是唯一能改到它的位置。
+///
+/// 若要验证这个假设，见 `EeveeSpotifySettingsView` 里那个实验开关（默认关）。
+///
+/// ── 安全边界（重要）────────────────────────────────────────────────────────
+/// · 只在 `shouldHandle` 命中的 path 上动手，且**只在缺少 `5` 时**追加；
+/// · 全程按 protobuf wire format 解析，任何一步不符合预期 → 返回 nil（**原样放行**，
+///   绝不"猜着改"）—— 坏掉的响应会让整个正在播放页出问题，宁可什么都不做；
+/// · 组装完再重新解析一遍自检，过不了就返回 nil。
+enum ScrollsitaLyricsElementInjector {
+
+    /// SECRET 那条响应里 `5` 元素用的 section。
+    ///
+    /// 各元素类型的 section 是**跨曲目固定**的，同一份响应里就能看到重复：
+    /// `…Gq1L` = 关于艺人、`…DABRtFWApcy61XJEwt` = 探索、`…Gq1O` = canvas，
+    /// 而这一项用的是 `…Gq21`（在另外两首没有歌词的曲目里都不出现）。
+    private static let lyricsSectionURI = "spotify:section:0JQ5DB6s3cssW5Bo6cGq21"
+
+    static func shouldHandle(_ url: URL) -> Bool {
+        url.path.contains("/scrollsita/v1/scroll/spotify:track:")
+    }
+
+    /// 需要注入时返回**新的一份 body**；不需要/不敢动时返回 nil（调用方原样放行）。
+    static func injectIfNeeded(url: URL, body: Data) -> Data? {
+        guard NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled,
+              shouldHandle(url),
+              let trackURI = trackURI(from: url) else {
+            return nil
+        }
+
+        let bytes = [UInt8](body)
+        var index = 0
+
+        // 顶层第一个字段就是元素列表（field 1, wire type 2）。
+        guard let firstKey = readVarint(bytes, &index),
+              firstKey >> 3 == 1, firstKey & 7 == 2,
+              let elementList = readLengthDelimited(bytes, &index) else {
+            return nil
+        }
+        // 其余字段（scroll id 等）原样接在后面。
+        let trailing: [UInt8] = index < bytes.count ? Array(bytes[index...]) : []
+
+        guard let present = elementFieldNumbers(elementList) else { return nil }
+        // 已经有了 → 服务端认为这首歌有词，什么都不用做。
+        guard !present.contains(Self.lyricsElementFieldNumber) else { return nil }
+
+        // ── 组装一个与 SECRET 那条**完全同形**的元素 ──
+        //
+        //   item = 0a <len> { 2a <len> { 0a <len> "<track uri>" }
+        //                     ba 01 <len> { 0a <len> "<section uri>" } }
+        let trackURIBytes = Array(trackURI.utf8)
+        let sectionURIBytes = Array(Self.lyricsSectionURI.utf8)
+
+        var elementBody: [UInt8] = [0x0A] + encodeVarint(trackURIBytes.count) + trackURIBytes
+        elementBody = [0x2A] + encodeVarint(elementBody.count) + elementBody
+
+        var sectionBody: [UInt8] = [0x0A] + encodeVarint(sectionURIBytes.count) + sectionURIBytes
+        sectionBody = [0xBA, 0x01] + encodeVarint(sectionBody.count) + sectionBody
+
+        let inner = elementBody + sectionBody
+        let item: [UInt8] = [0x0A] + encodeVarint(inner.count) + inner
+
+        let newElementList = item + elementList
+
+        var result: [UInt8] = [0x0A]
+        result += encodeVarint(newElementList.count)
+        result += newElementList
+        result += trailing
+
+        // ── 自检：能完整解析、且 `5` 已经在里面，才交出去 ──
+        var check = 0
+        guard let checkKey = readVarint(result, &check),
+              checkKey >> 3 == 1, checkKey & 7 == 2,
+              let checkedList = readLengthDelimited(result, &check),
+              let checkedNumbers = elementFieldNumbers(checkedList),
+              checkedNumbers.contains(Self.lyricsElementFieldNumber) else {
+            writeDebugLog("[Scrollsita] ⚠️ self-check failed — leaving the body untouched")
+            return nil
+        }
+
+        writeDebugLog(
+            "[Scrollsita] injected lyrics-card element — track=\(trackURI)"
+                + " body \(bytes.count)B -> \(result.count)B"
+        )
+        return Data(result)
+    }
+
+    // MARK: - wire format 小工具（只为这个文件服务）
+
+    /// 歌词卡片元素的内层字段号（来自上面那张对照表）。
+    private static let lyricsElementFieldNumber = 5
+
+    /// 列出这份元素列表里每个元素的内层字段号。
+    ///
+    /// 「元素类型」在 wire format 里就是 item 自己的第一个字段号：`2` = 关于艺人、
+    /// `3` = 探索、`4` = canvas、`5` = 待验证的那一项（假设是歌词卡片）。
+    /// 任何一步不符合预期 → nil（调用方放弃注入）。
+    private static func elementFieldNumbers(_ elementList: [UInt8]) -> Set<Int>? {
+        var index = 0
+        var numbers = Set<Int>()
+
+        while index < elementList.count {
+            guard let key = readVarint(elementList, &index),
+                  key >> 3 == 1, key & 7 == 2,
+                  let item = readLengthDelimited(elementList, &index) else {
+                return nil
+            }
+
+            var itemIndex = 0
+            guard let innerKey = readVarint(item, &itemIndex), innerKey & 7 == 2 else {
+                return nil
+            }
+            numbers.insert(innerKey >> 3)
+        }
+
+        return numbers.isEmpty ? nil : numbers
+    }
+
+    private static func readVarint(_ bytes: [UInt8], _ index: inout Int) -> Int? {
+        var value = 0
+        var shift = 0
+
+        while index < bytes.count {
+            let byte = Int(bytes[index])
+            index += 1
+            value |= (byte & 0x7F) << shift
+            if byte & 0x80 == 0 { return value }
+            shift += 7
+            if shift > 28 { return nil }
+        }
+
+        return nil
+    }
+
+    private static func readLengthDelimited(_ bytes: [UInt8], _ index: inout Int) -> [UInt8]? {
+        guard let length = readVarint(bytes, &index),
+              length >= 0, index + length <= bytes.count else {
+            return nil
+        }
+
+        let payload = Array(bytes[index..<(index + length)])
+        index += length
+        return payload
+    }
+
+    private static func encodeVarint(_ value: Int) -> [UInt8] {
+        var remaining = UInt64(max(value, 0))
+        var out: [UInt8] = []
+
+        repeat {
+            var byte = UInt8(remaining & 0x7F)
+            remaining >>= 7
+            if remaining != 0 { byte |= 0x80 }
+            out.append(byte)
+        } while remaining != 0
+
+        return out
+    }
+
+    private static func trackURI(from url: URL) -> String? {
+        let marker = "/scrollsita/v1/scroll/"
+        guard let range = url.path.range(of: marker) else { return nil }
+
+        let uri = String(url.path[range.upperBound...])
+        guard uri.hasPrefix("spotify:track:") else { return nil }
+        return uri
+    }
+}

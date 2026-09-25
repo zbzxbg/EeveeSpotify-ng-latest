@@ -420,7 +420,17 @@ private let propertyReplacements = [
     EeveePropertyReplacement(name: "enable_has_lyrics_check_bypass", modification: .setBool(true)),
     // 总开关：会话中途被服务端改回 false 会让歌词整体消失，这里钉死为 true。
     EeveePropertyReplacement(name: "enable_lyrics", scope: "ios-feature-lyrics", modification: .setBool(true)),
-    EeveePropertyReplacement(name: "enable_lyrics", modification: .setBool(true))
+    EeveePropertyReplacement(name: "enable_lyrics", modification: .setBool(true)),
+
+    // 「歌词入口」——2026-09-25 真机 `[Flags]` 取证：服务端下发的整份歌词 flag 清单里
+    // （日志 18 行 35–48）**只有这一项是 false**，其余全是 true：
+    //
+    //     ios-feature-lyrics  lyrics_entry_point_enabled = false
+    //
+    // 而"与「关于艺人」并列的歌词卡片"正是这个词的字面意思（入口：点了才进全屏歌词）。
+    // scope/name 都来自服务端实际下发的内容（不是猜的）→ `setBool` 是"钉已存在的值"，
+    // 不存在命中 0 条的空枪风险；服务端要是本来就是 true，这一行等于没写。
+    EeveePropertyReplacement(name: "lyrics_entry_point_enabled", scope: "ios-feature-lyrics", modification: .setBool(true))
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
