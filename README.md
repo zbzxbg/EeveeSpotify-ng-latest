@@ -20,8 +20,8 @@ Versions under development are not made publicly available to users.
 
 ##  Notice
 
-- Verified environment: iPhone 11 · iOS 27.0 · certificate-signed build · LCSign · rootless DEB.
-
+- Verified environment: iPhone 11 · Spotify 9.1.86 ·iOS 27.0 · certificate-signed build · LCSign · rootless DEB.
+The modified features in this fork have been verified to work in this environment
 
 ##  Acknowledgements
 
