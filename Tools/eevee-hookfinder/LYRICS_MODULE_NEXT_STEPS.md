@@ -457,7 +457,47 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
-## 13. 历史遗留（原 §9/§11，位置随追加而后移）
+## 15. 第五轮：`lineColor` / `activeLineColor` 是"未唱 / 已唱"，两个不能一起改
+
+**反馈**：卡片与全屏页**整片全白**。"正常来讲是未唱到的行才黑色，其他的白色；单行歌词没问题。"
+
+**语义**（这次终于钉死，两边代码互相印证）：
+
+| 字段 | 含义 | 正确值 |
+|---|---|---|
+| `lineColor` | **未唱到**的行 | 黑 |
+| `activeLineColor` | **已唱 / 正在唱**的行 | 白 |
+
+- 我们自己的 overlay 就是这么用的：`LyricsWordByWord` 里
+  `label.textColor = index <= activeIndex ? activeLineColorValue : lineColor`；
+- 单行歌词（面 A）用的是"当前行"那一档，所以它一直是白的、也一直没问题
+  —— 这正好解释了为什么早期那版（`lineColor` 黑 / `activeLineColor` 白）下，
+  照片 08:37 里单行是白的而卡片是黑块。
+
+**两轮错法**（都记在这里，别再犯）：
+
+| 版本 | `lineColor` | `activeLineColor` | 真机结果 |
+|---|---|---|---|
+| §10（按底色明暗翻转，`bye bitch!` 判为浅底） | 黑 | **黑** | 整片全黑 |
+| §14（统一深底白字） | **白** | 白 | 整片全白 |
+| 现在（§15） | 黑 | 白 | 期望：未唱黑、已唱白 |
+
+**修复**（`synthesizedLyricsColors()`）：
+
+- 字色**复原**为 `lineColor = Color.black` / `activeLineColor = Color.white`；
+- 面板保持**不透明**、明度为 `color.normalized(normalizationFactor)`（中明度）——
+  不再额外压暗，因为黑字（未唱行）需要中明度以上的底才看得见；
+- 只保留 §10/§12 两个真修复：**面板不清 alpha** + **占位 payload 也有颜色**。
+
+**待验证**：`bye bitch!`（真实歌词）与 `NIGHT VIBE`（占位）卡片应为"未唱黑 / 已唱白"，
+单行歌词维持现状；200 曲目（原始配色）不受影响。
+
+**若观感仍不对**，可调的只有一处：面板明度（`normalizationFactor` 那一步）。
+黑字更清楚 → 面板更亮；白字更清楚 → 面板更暗，但两者不可能同时最优 —— 这是取舍，不是 bug。
+
+---
+
+## 16. 历史遗留（原 §9/§11/§13，位置随追加而后移）
 
 - ~~§0 的"两个面互斥、合成时间轴把卡片挤掉"~~ → **作废**，见 §7.3/§7.4：无时间轴并不产生卡片，
   真正决定卡片存在性的是服务端的元素列表；

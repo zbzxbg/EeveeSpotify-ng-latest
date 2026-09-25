@@ -348,8 +348,9 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     /// （Spotify 自己没词，必然没有 `originalColors`）的卡片与全屏页在**颜色字段全空**时
     /// 被渲染成纯黑；而能取到词的曲目因为走了另一支，已经修好了。
     ///
-    /// 产出**深底 + 白字**（未唱略暗、当前行纯白）：与 Spotify 自己那套配色同向
-    /// （200 曲目的原始配色就是这个观感），也满足真机反馈"每行与当前行都该是白的"。
+    /// 产出**中明度不透明面板 + "未唱黑 / 已唱白"** —— 与 Spotify、以及我们自己的逐词
+    /// overlay 同一套语义（`lineColor` 管未唱、`activeLineColor` 管已唱/当前行）。
+    /// ⚠️ 这两个字段不能一起改：都设黑 = 整片全黑，都设白 = 整片全白（真机都踩过）。
     func synthesizedLyricsColors() -> LyricsColors {
         let settings = UserDefaults.lyricsColors
         let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
@@ -361,7 +362,7 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             track?.metadata()["extracted_color"]
         }
 
-        // 这里只算出"这首歌的底色"本身；统一压暗放到下面**一处**做（不要两处归一化，
+        // 这里只算出"这首歌的底色"本身；归一化放到下面**一处**做（不要两处，
         // 否则读的人无法判断最终明度到底由谁决定）。
         var color: Color
         if settings.useStaticColor {
@@ -374,20 +375,22 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             color = Color.gray
         }
 
-        // 统一"深底 + 白字"，不再按底色明暗二选一。
-        //
-        // 为什么：Spotify 自己的歌词卡片就是这个约定 —— 对照 200 曲目走原始配色的照片
-        // （2026-09-25 08:42）：深色面板 + 浅色行 + 当前行更亮。按明暗二选一时，
-        // 浅色封面的曲目会整片变黑字；真机反馈（日志 22，`bye bitch!` 的 FF8B8B8B 被判成
-        // "浅底"）原话就是"每行应该是白的却是黑的、正在唱/已唱的也是黑的"。
-        // 所以面板统一压暗到足以承载白字，文字统一白（未唱略暗、当前行纯白）。
-        let panel = color
-            .normalized(settings.normalizationFactor)
-            .darker(by: 0.45)
+        // 面板：album 主色归一化到中明度，**保持不透明**。
+        // 不能像原来那样把 alpha 清掉（那会露出卡片默认黑底）；也不该压得很暗 ——
+        // 因为下面的字色是"未唱黑 / 已唱白"，黑字需要中明度以上的底才看得见。
+        let panel = color.normalized(settings.normalizationFactor)
 
+        // 字色沿用**最初那套约定**（也就是我们自己 overlay 的约定，见 `LyricsWordByWord`：
+        // `index <= activeIndex ? activeLineColor : lineColor`）：
+        //   · 未唱到的行   = `lineColor`       = 黑
+        //   · 已唱 / 正在唱 = `activeLineColor` = 白
+        //
+        // 真机教训（2026-09-25）：这两个字段一个管"未唱"、一个管"已唱"，**不能一起改** ——
+        // 两个都设黑 → 卡片与全屏页整片全黑；两个都设白 → 整片全白
+        // （反馈原话："正常来讲是未唱到的行才黑色，其他的白色"）。
         let palette = LyricsColors.with {
             $0.backgroundColor = panel.uInt32
-            $0.lineColor = Color(white: 0.72).uInt32
+            $0.lineColor = Color.black.uInt32
             $0.activeLineColor = Color.white.uInt32
         }
         // 两条路径共用这个函数，所以这条日志同时覆盖"真实歌词"与"占位 payload"
