@@ -42,8 +42,7 @@ musixmatch_user_token = "Musixmatch 用户令牌";
 user_token_placeholder = "输入用户令牌或粘贴调试信息";
 
 
-ngzhwm_amll_preferred = "AMLL优先";
-ngzhwm_amll_preferred_description = "选项生效需要开启逐词歌词。选项开启后会优先向AMLL请求逐词歌词。如果AMLL未返回逐词歌词，则回退用户自己选择的歌词来源和相关设置进行请求。目前开启该选项后，歌词将不展示歌词翻译。";
+// 已删除 ngzhwm_amll_preferred / ngzhwm_amll_preferred_description（「AMLL 优先」功能移除）
 
 genius_fallback = "Genius回退";
 genius_fallback_description = "该功能在此版本上体验不佳。如果 %@ 未正常加载，将使用 Genius 加载歌词。开启此选项后，部分歌曲的预览歌词模块会不展示。";

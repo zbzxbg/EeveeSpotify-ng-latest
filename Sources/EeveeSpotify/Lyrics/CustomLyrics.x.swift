@@ -183,79 +183,11 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             throw LyricsError.invalidSource
         }
 
-        // 「AMLL 优先」：先向 AMLL 要逐词歌词，**只接受逐词歌词**，
-        // 拿不到就回退到用户在来源选择器里设置的那个源（连同它的相关设置）。
+        // 已删除「AMLL 优先」（2026-09-25，用户反馈"感觉没什么用"）。
         //
-        // 回退目标刻意不是硬编码的：哪个源适合兜底完全取决于地区与语言 ——
-        // 日本用户设 PetitLyrics、大陆用户设网易云、其它地区设 SpicyLyrics，
-        // 各自回退到自己最合适的地方，不需要我们再维护一份地区判断。
-        // 该选项依赖逐词歌词，未开启时视为未勾选。
-        let amllPreferred = NgzhwmSettingsViewModel.isAmllPreferred
-            && NgzhwmSettingsViewModel.isWordByWordLyricsEnabled
-            && source != .amllTtml
-
-        if amllPreferred {
-            writeDebugLog("[Lyrics] AMLL preferred — trying AMLL first, fallback target: \(source.description)")
-
-            // 走同一套单源错误处理：记录 fallbackError、弹 MxM 相关弹窗。
-            //
-            // ⚠️ 结果里带的是**实际**给词的那个源：AMLL 请求失败而 Genius 兜底成功时，
-            // 拿回来的 dto 是 Genius 的。以前这里只回传 dto、源名沿用调用方传的那个，
-            // 于是"来源标签写 AMLL、内容其实是 Genius"。
-            let amllResult = try? requestSingleSource(
-                .amllTtml,
-                searchQuery: searchQuery,
-                options: options,
-                recordFallbackError: true
-            )
-
-            // ⚠️ 判据是**逐词可用**，不是「有行」。
-            //
-            // AMLL 的 TTML 里两种数据都可能出现：
-            //   · 有 `<span>` 逐词时间轴 → 逐词歌词（要的）
-            //   · 只有 `<p begin=...>` 行级时间轴 → 就是一行一句的普通同步歌词
-            // 以前这里只判 `!lines.isEmpty`，于是第二种也被当成"AMLL 成功"直接采用：
-            // 用户明明开了「AMLL 优先」（只想要逐词），结果拿到一份逐行歌词，
-            // 而且它的排版/来源和用户自己设的那个源完全不同 —— 看起来就像"设置没生效"。
-            //
-            // 现在把判定口径与渲染层对齐（同一个 `hasUsableWordLevelData`）：
-            // 行级数据在这里就被判为"不合格"，交给下面用户设置的源去处理。
-            // 无时间轴的数据同样过不了这一关（`timeSynced == false`），一并回退。
-            if let result = amllResult, hasUsableWordLevelData(result.dto) {
-                writeDebugLog("[Lyrics] AMLL succeeded — using it (\(result.dto.lines.count) line(s))")
-                return makeLyrics(
-                    from: result.dto,
-                    source: result.source,
-                    durationMs: searchQuery.durationMs
-                )
-            }
-
-            // 分开报两种失败原因：日志里能立刻分清是"请求失败"还是"拿到了但不够逐词"。
-            if let dto = amllResult?.dto {
-                let timeline = dto.timeSynced ? "line-or-word timeline" : "no timeline"
-                writeDebugLog(
-                    "[Lyrics] AMLL returned \(dto.lines.count) line(s) but not word-by-word"
-                        + " (\(timeline)) — falling back to \(source.description)"
-                )
-            } else {
-                writeDebugLog(
-                    "[Lyrics] AMLL unavailable — falling back to \(source.description) with its own settings"
-                )
-            }
-            // 用户设置的就是 Genius 时不必再走下面的 geniusFallback，否则会重复请求一次。
-            let result = try requestSingleSource(
-                source,
-                searchQuery: searchQuery,
-                options: options,
-                recordFallbackError: false,
-                allowGeniusFallback: source != .genius
-            )
-            return makeLyrics(
-                from: result.dto,
-                source: result.source,
-                durationMs: searchQuery.durationMs
-            )
-        }
+        // 它原本是"先向 AMLL 要逐词歌词、判定为逐词可用才采用、否则回退到用户选的源"。
+        // 现在 AMLL 就只是来源选择器里的一个普通来源：选它 → 只查它（加上可选的 Genius 兜底），
+        // 与其它来源完全同一条路。这样少一层"看起来像设置没生效"的分支。
 
         let result = try requestSingleSource(
             source,
@@ -289,8 +221,9 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     /// - 该源的错误会写入 `lyricsState.fallbackError`（`recordFallbackError`）并弹 MxM 相关弹窗；
     /// - 非 Genius 源失败且 `options.geniusFallback` 开启时，再用 Genius 重试一次。
     ///
-    /// - Parameter allowGeniusFallback: 为 false 时跳过 Genius 兜底。用于
-    ///   「AMLL 优先」模式下用户设置本身就是 Genius 的场景，避免重复请求同一个源。
+    /// - Parameter allowGeniusFallback: 为 false 时跳过 Genius 兜底。
+    ///   ⚠️ 目前**没有调用方传 false** —— 原先唯一那个是已删除的「AMLL 优先」回退链。
+    ///   所以它现在等价于恒为 true；参数保留是因为语义仍然成立（"这条链要不要 Genius 兜底"）。
     private func requestSingleSource(
         _ source: LyricsSource,
         searchQuery: LyricsSearchQuery,
@@ -321,8 +254,7 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                 }
             }
 
-            // 注意顺序：Genius 失败不再兜底为空歌词（与既有行为一致）——
-            // allowGeniusFallback 在用户设置本身就是 Genius 时为 false。
+            // 注意顺序：Genius 失败不再兜底为空歌词（与既有行为一致）。
             if !allowGeniusFallback || !options.geniusFallback {
                 throw error
             }

@@ -497,6 +497,31 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 25. 第十三轮：删除「AMLL 优先」（2026-09-25，用户："感觉没什么用"）
+
+| 位置 | 删掉的内容 |
+|---|---|
+| `CustomLyrics.x.swift` → `loadCurrentLyricsForCurrentTrack` 的 `else` 分支 | 整段 `if amllPreferred { … }`：先向 AMLL 要逐词歌词，`hasUsableWordLevelData` 不合格就回退到用户选的那个源（并把"请求失败"与"拿到了但不够逐词"分开记日志） |
+| `NgzhwmSettingsViewModel` | `amllPreferredKey` + `isAmllPreferred` |
+| `EeveeLyricsSettingsViewModel` | `@Published amllPreferred`（含写 UserDefaults 的 `didSet`） |
+| `EeveeLyricsSettingsView` | `amllPreferredSection()` 与调用点（原来还带"来源不是 genius / multiLevel / lrclib / amllTtml"的条件） |
+| `+setupBindings` | `logBooleanSetting($amllPreferred, …)` |
+| `en` / `zh-CN` | `ngzhwm_amll_preferred`、`ngzhwm_amll_preferred_description` |
+
+**保留**：AMLL 仍然是来源选择器里的**普通来源**（`.amllTtml` + `AmllTtmlLyricsRepository` 一行未动），
+选了它就只查它（加上可选的 Genius 兜底），与其它来源同一条路。
+
+**顺带修掉一个上一轮埋下的编译错误**：`EeveeLyricsSettingsViewModel.animationValues` 里还列着
+已删除的 `amllPreferred` 与已写死启用的 `hideOfficialLyrics` —— 属性都没了，列着就是编译错误
+（§23 那次漏掉的），本次一并清掉。
+
+**另一处遗留说明**：`requestSingleSource(allowGeniusFallback:)` 现在没有调用方传 `false`
+（唯一那个就是这条被删的链），文档注释已改成如实描述；行为与改动前一致。
+
+**未验证**：无编译验证（本机无 Swift 工具链）。设备上残留的 `ngzhwm_amllPreferred` 键不再被读取（留着无害）。
+
+---
+
 ## 24. 本地化同步（2026-09-25）：英文跟上中文那几处改动
 
 中文文件被改过之后，英文同步；现在两个 locale 的 key 集**完全一致**

@@ -36,14 +36,8 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
     
-    @Published var amllPreferred = NgzhwmSettingsViewModel.isAmllPreferred {
-        didSet {
-            UserDefaults.standard.set(
-                amllPreferred,
-                forKey: NgzhwmSettingsViewModel.amllPreferredKey
-            )
-        }
-    }
+    // 已移除「AMLL 优先」（2026-09-25，用户反馈没意义）：AMLL 仍然是来源选择器里的
+    // 一个普通来源，但不再有"先试 AMLL、不合格再回退"的那条链。
     
     // 已移除三个开关（2026-09-25）：`hideOfficialLyrics` / `syntheticLineTiming` /
     // `injectLyricsCardElement` —— 它们对应的行为已经在 `NgzhwmSettingsViewModel` 里
@@ -122,8 +116,8 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
             lyricsOptions,
             betterWordByWordLyrics,
             wordByWordLyrics,
-            amllPreferred,
-            hideOfficialLyrics,
+            // ⚠️ `amllPreferred`（已删功能）与 `hideOfficialLyrics`（已写死启用）都不能再列在这里 ——
+            // 属性本身没了，列着就是编译错误。
             disableLyricsFeature,
             removeMxmInterludeSymbol,
             neteaseRomajiLocal,
