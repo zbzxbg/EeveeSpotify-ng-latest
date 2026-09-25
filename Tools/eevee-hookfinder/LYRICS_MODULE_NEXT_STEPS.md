@@ -337,7 +337,60 @@ payload 切换任何东西 ⇒ 服务器决定卡片这条假设可以判死"。
 
 ---
 
-## 9. 历史遗留（本轮作废/保留）
+## 10. 真机回报第二轮：**注入成功**，剩下的黑块是我们自己的配色（2026-09-25 08:37–08:42，日志 19/20）
+
+### 10.1 结论：假设成立
+
+日志 19/20 里，`[Scrollsita] injected lyrics-card element …` + `[HCUS] Patched LyricsCardElement`
+成对出现了 **9 次**（`5utfun…`、`6KXIO2…`、`0Ww7IJ…`、`1V12Ql…`、`20uOWz…`、`0OTlye…`、`3kl96W…`、
+`6gxObr…`、`4m1ufw…`），用户确认**本来没有卡片的曲目现在有卡片了**（照片里能看到
+「歌词」标题栏 + 分享/展开按钮）。→ **卡片的存在性由服务端元素列表决定，补上那一项就能造出卡片。**
+
+→ 顺带再推翻一条：这次 `synthetic line timing: ON`（payload 有时间轴）**也有卡片**，
+所以"有时间轴就不建卡片"同样不成立。**元素列表是唯一的门**，时间轴只影响内容怎么画。
+另外「封面下单行」与卡片**可以共存**（照片 1 里 `未找到歌词` 那行和卡片同时在）。
+
+### 10.2 黑块的原因：自造颜色分支 + 清背景 alpha
+
+照片 1 / 2（`Montagem Digital 3`，404 曲目）：
+- 卡片**在**，标题栏「歌词」+ 图标正常（白色）；
+- 卡片内容区**整块黑**；点开全屏也是**全黑、没有字**。
+
+照片 3（`ヒミツ`=SECRET，200 曲目）：
+- 卡片正常：深色半透面板 + 浅色歌词文字，当前行更亮。
+
+日志对照（同一份日志 20）：
+```
+404 曲目：provider: NetEase (EeveeSpotify)
+          [Lyrics] injected background FF5C778C -> 005C778C (transparent)   ← 无 "Using original colors"
+200 曲目：[Lyrics] Using original colors
+          [Lyrics] injected background FF62787D -> 0062787D (transparent)
+```
+
+即：**404 曲目必然走"自造颜色"那一支**（拿不到 Spotify 原始颜色），而那一支原本写死
+`lineColor = Color.black` + `activeLineColor = Color.white`
+（`CustomLyrics.x.swift` 旧 651–655 行），紧接着又把背景 alpha 清成 0（旧 680–690 行）。
+清 alpha 的**前提**是"我们的 overlay 会把模糊封面铺在卡片面板下面"；9.1.86 上 overlay
+根本挂不上（日志里 `inline host found` 从未出现）→ 清完 alpha 露出来的是**卡片自己的默认黑底**，
+再叠上黑字 = 黑压黑。200 曲目之所以没事，是因为它用的是 Spotify 原始颜色（浅色字）。
+
+### 10.3 修复（`Sources/EeveeSpotify/Lyrics/CustomLyrics.x.swift`）
+
+1. 自造颜色分支：字色按**实际底色的明暗**选（`color.brightness < 0.5` → 深底白字 / 浅底黑字），
+   与 `LyricsWordByWord.resolveTextColors` 同一约定，不再写死黑字；
+2. 当「自造颜色 **且** 补卡片元素开关打开」时**不清背景 alpha** —— 保留不透明的封面主色底，
+   并打一条 `keeping synthesized background opaque %08X` 便于真机核对；
+3. **200 曲目（原始颜色）路径完全不变**（仍然清 alpha，照片 3 的观感保持原样）。
+
+### 10.4 仍未验证
+
+- 三处改动**没有编译验证**（本机无 Swift 工具链）；
+- 修完是什么观感（不透明的封面主色面板 vs 现在的黑块）只有真机照片能判定；
+- 若用户更想要"模糊封面"那种半透底，那就得回到"让 overlay 在 9.1.86 上挂上卡片"这条更长的路。
+
+---
+
+## 11. 历史遗留（原 §9，位置随 §10 追加而后移）
 
 - ~~§0 的"两个面互斥、合成时间轴把卡片挤掉"~~ → **作废**，见 §7.3/§7.4：无时间轴并不产生卡片，
   真正决定卡片存在性的是服务端的元素列表；

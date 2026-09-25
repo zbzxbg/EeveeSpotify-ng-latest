@@ -624,6 +624,10 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
 
     let lyricsColorsSettings = UserDefaults.lyricsColors
 
+    /// 这次用的是**我们自己算出来的颜色**（拿不到 Spotify 原始颜色：曲目 404、或用户关了
+    /// 「显示原始颜色」）。它决定下面"清背景 alpha"那一步要不要跳过 —— 见那段注释。
+    var usesSynthesizedColors = false
+
     if lyricsColorsSettings.displayOriginalColors, let originalLyrics = originalLyrics {
         writeDebugLog("[Lyrics] Using original colors")
         lyrics.colors = originalLyrics.colors
@@ -648,11 +652,19 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
             color = Color.gray
         }
 
+        // 文字色按**实际底色的明暗**选，而不是写死黑字。
+        //
+        // 写死 `lineColor = Color.black` 的那套约定来自"Spotify 自己的兜底底"（浅色面板）；
+        // 而这个分支的底色是我们按封面主色算出来的**中深色**（真机日志里是 FF5C778C /
+        // FF8E8E93 / FF7096BB 这类）—— 黑字压上去就是黑字压深底。
+        // 与 `LyricsWordByWord.resolveTextColors` 保持同一约定：深底白字、浅底黑字。
+        let isDarkBackground = color.brightness < 0.5
         lyrics.colors = LyricsColors.with {
             $0.backgroundColor = color.uInt32
-            $0.lineColor = Color.black.uInt32
-            $0.activeLineColor = Color.white.uInt32
+            $0.lineColor = (isDarkBackground ? Color.white.opacity(0.72) : Color.black).uInt32
+            $0.activeLineColor = (isDarkBackground ? Color.white : Color.black).uInt32
         }
+        usesSynthesizedColors = true
     }
 
     // 记录最终生效的歌词背景色（原始色或定制色），供逐字 overlay 复用，保证与原生模块同色。
@@ -679,12 +691,27 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     //   · 我们自己的 overlay 用的是上面那个 `currentLyricsBackgroundColorARGB`（原值）。
     let injected = lyrics.colors.backgroundColor
     let transparentBackground = injected & 0x00FF_FFFF
-    if transparentBackground != injected {
+    // 只在**不是**"自造颜色 + 已开补卡片元素"这个组合时清 alpha。
+    let keepsOpaqueBackground = usesSynthesizedColors
+        && NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled
+    if !keepsOpaqueBackground, transparentBackground != injected {
         lyrics.colors.backgroundColor = transparentBackground
         writeDebugLog(
             String(
                 format: "[Lyrics] injected background %08X -> %08X (transparent)",
                 injected, transparentBackground
+            )
+        )
+    } else if keepsOpaqueBackground {
+        // 为什么这里必须留着不透明：清 alpha 的**前提**是"我们的 overlay 会把模糊封面铺在
+        // 卡片面板底下"（见上面那段）。而 9.1.86 上 overlay 根本挂不上 —— 日志里
+        // `inline host found` 从未出现过，清完 alpha 只会露出卡片自己的默认黑底。
+        // 2026-09-25 08:37 的两张真机照片正是这个组合：卡片整块黑、歌词字看不见。
+        // 自造颜色这一支本来也没有"Spotify 的底"可以露，所以直接给不透明底色。
+        writeDebugLog(
+            String(
+                format: "[Lyrics] keeping synthesized background opaque %08X (no overlay paints this card)",
+                injected
             )
         )
     }
