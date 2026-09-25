@@ -431,6 +431,32 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 14. 第四轮：配色改成"统一深底白字"（日志 22）
+
+**反馈**：`bye bitch!` 这类曲目"每行歌词应该是白的，现在是黑的；正在唱 / 已唱过的行也应该是白的，
+现在是全黑"。
+
+**原因**：§10 里我按"底色明暗二选一"（`brightness < 0.5` → 深底白字，否则黑字），
+而 `bye bitch!` 的封面主色是 `FF8B8B8B`、亮度 0.545 → 被判成"浅底" →
+`lineColor` 与 `activeLineColor` **全给了黑**（日志 22：`keeping synthesized background opaque FF8B8B8B`）。
+而期望的从来是**白字** —— Spotify 自己的卡片就是这个观感，对照 200 曲目的原始配色（照片 08:42）：
+深色面板 + 浅色行 + 当前行更亮。
+
+**修复**（`synthesizedLyricsColors()`）：
+
+1. 面板：`color.normalized(normalizationFactor).darker(by: 0.45)` —— 保留封面色相，
+   统一压暗到足以承载白字（不再出现"纯黑壳"，也不再是浅色壳配黑字）；
+2. 文字：`lineColor = Color(white: 0.72)`、`activeLineColor = Color.white` ——
+   **不再随明暗翻转**，与真机期望一致；
+3. 顺手把重复的 `.normalized(...)` 收成一处，并加日志
+   `[Lyrics] synthesized card colors — panel=… line=… active=…`
+   （这条同时覆盖占位 payload 那条路 —— 它以前连颜色都没有，更没有日志）。
+
+**待验证**：`bye bitch!` 卡片应为"深色面板 + 白色歌词、当前行更亮"；占位曲目（`NIGHT VIBE`）同上；
+200 曲目（走原始配色）不受影响。
+
+---
+
 ## 13. 历史遗留（原 §9/§11，位置随追加而后移）
 
 - ~~§0 的"两个面互斥、合成时间轴把卡片挤掉"~~ → **作废**，见 §7.3/§7.4：无时间轴并不产生卡片，

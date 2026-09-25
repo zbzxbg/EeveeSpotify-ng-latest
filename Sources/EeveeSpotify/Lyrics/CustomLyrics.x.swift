@@ -348,7 +348,8 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     /// （Spotify 自己没词，必然没有 `originalColors`）的卡片与全屏页在**颜色字段全空**时
     /// 被渲染成纯黑；而能取到词的曲目因为走了另一支，已经修好了。
     ///
-    /// 底色约定与 `LyricsWordByWord.resolveTextColors` 一致：深底白字、浅底黑字。
+    /// 产出**深底 + 白字**（未唱略暗、当前行纯白）：与 Spotify 自己那套配色同向
+    /// （200 曲目的原始配色就是这个观感），也满足真机反馈"每行与当前行都该是白的"。
     func synthesizedLyricsColors() -> LyricsColors {
         let settings = UserDefaults.lyricsColors
         let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
@@ -360,25 +361,44 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             track?.metadata()["extracted_color"]
         }
 
+        // 这里只算出"这首歌的底色"本身；统一压暗放到下面**一处**做（不要两处归一化，
+        // 否则读的人无法判断最终明度到底由谁决定）。
         var color: Color
         if settings.useStaticColor {
             color = Color(hex: settings.staticColor)
         } else if let extractedColor {
             color = Color(hex: extractedColor)
-                .normalized(settings.normalizationFactor)
         } else if let uiColor = backgroundViewModel?.color() {
             color = Color(uiColor)
-                .normalized(settings.normalizationFactor)
         } else {
             color = Color.gray
         }
 
-        let isDarkBackground = color.brightness < 0.5
-        return LyricsColors.with {
-            $0.backgroundColor = color.uInt32
-            $0.lineColor = (isDarkBackground ? Color.white.opacity(0.72) : Color.black).uInt32
-            $0.activeLineColor = (isDarkBackground ? Color.white : Color.black).uInt32
+        // 统一"深底 + 白字"，不再按底色明暗二选一。
+        //
+        // 为什么：Spotify 自己的歌词卡片就是这个约定 —— 对照 200 曲目走原始配色的照片
+        // （2026-09-25 08:42）：深色面板 + 浅色行 + 当前行更亮。按明暗二选一时，
+        // 浅色封面的曲目会整片变黑字；真机反馈（日志 22，`bye bitch!` 的 FF8B8B8B 被判成
+        // "浅底"）原话就是"每行应该是白的却是黑的、正在唱/已唱的也是黑的"。
+        // 所以面板统一压暗到足以承载白字，文字统一白（未唱略暗、当前行纯白）。
+        let panel = color
+            .normalized(settings.normalizationFactor)
+            .darker(by: 0.45)
+
+        let palette = LyricsColors.with {
+            $0.backgroundColor = panel.uInt32
+            $0.lineColor = Color(white: 0.72).uInt32
+            $0.activeLineColor = Color.white.uInt32
         }
+        // 两条路径共用这个函数，所以这条日志同时覆盖"真实歌词"与"占位 payload"
+        // （后者以前完全没有颜色、也没有日志，占位曲目的黑块就是那么来的）。
+        writeDebugLog(
+            String(
+                format: "[Lyrics] synthesized card colors — panel=%08X line=%08X active=%08X",
+                palette.backgroundColor, palette.lineColor, palette.activeLineColor
+            )
+        )
+        return palette
     }
 
     /// 「取不到我们的歌词」时交给 Spotify 的替身 payload —— 目的是**不让 Spotify 把
