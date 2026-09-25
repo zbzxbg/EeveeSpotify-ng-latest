@@ -1453,8 +1453,46 @@ final class WordByWordHost {
     ///
     /// 同上看门狗：全屏页是盖在内嵌页之上的 sheet，内嵌页的 `viewWillAppear`
     /// 不会重来，看门狗一直在跑；**没有这道闸门它会把全屏的层拽回卡片**。
+    ///
+    /// ⚠️ 这是**纯布尔**判据，所以必须配 `clearStaleAttachmentIfNeeded()` 一起用：
+    /// 标记只有在**我们自己**调 `detach()` 时才会清，全屏页被系统/Spotify 拆掉而
+    /// 那条 `viewWillDisappear` 没走到时，标记会残留成"全屏还挂着" → 闸门永久挡住
+    /// 预览层的重挂。自愈那一半见下面那个方法。
     var fullscreenOverlayIsAttached: Bool {
         isAttached && attachedShowsProviderFooter
+    }
+
+    /// 挂载标记自愈：**标记说挂着、但那一层其实已经不在任何窗口里**时清掉它。
+    ///
+    /// 为什么必须有（真机症状）：全屏里点几下歌词行再退出，之后**预览一直退化成
+    /// 逐行、切到别的歌也一样**，只有重启才恢复。机制就是这里的标记残留 ——
+    /// `isAttached`/`attachedShowsProviderFooter` 是纯布尔，`detach()` 没被调用
+    /// （全屏 VC 被拆掉 / `viewWillDisappear` 没赶上 / 层被系统收走）就永远为真，
+    /// 而看门狗第一道闸门正是 `guard !fullscreenOverlayIsAttached else { return }`，
+    /// 于是预览层再也挂不回来。
+    ///
+    /// 判据与 `inlineOverlayIsLive` **完全同源**（视图必须还在窗口里），
+    /// 所以不会误伤"真的全屏中"的情况。
+    func clearStaleAttachmentIfNeeded() {
+        guard isAttached else { return }
+
+        let live: Bool
+        if #available(iOS 26.0, *), let view = AppleMusicLyricsOverlayHost.shared.overlayView {
+            live = view.superview != nil && view.window != nil
+        } else if let overlay {
+            live = overlay.superview != nil && overlay.window != nil
+        } else {
+            live = false
+        }
+
+        guard !live else { return }
+        writeDebugLog(
+            "[WordByWord] stale attachment cleared — the layer is not in any window"
+                + " (wasFullscreen=\(attachedShowsProviderFooter))"
+        )
+        // `clearForUnavailableLyrics` = detach() + 作废 `renderedLyricsVersion`，
+        // 正是"层没了、下次重挂一定要成立"需要的那两件事。
+        clearForUnavailableLyrics()
     }
 
     /// 这一首**没有**我们的歌词了（取词失败 / 用户选了原生歌词）时调用：
@@ -1525,6 +1563,32 @@ final class WordByWordHost {
                 AppleMusicLyricsOverlayHost.shared.refreshLinesIfNeeded()
             }
             return
+        }
+
+        // 全屏页**开着**、但我们的层没挂上 —— 必须挂回**全屏**，不能按预览处理。
+        //
+        // 成因（真机"小概率全屏是逐行 + 专辑色背景"）：全屏页出现时歌词还在路上
+        // （PL 这种两次请求的源更容易撞上），`viewWillAppear` / `viewDidAppear` 两次
+        // `attach` 都因为"行级数据都还没有"落空；等歌词到达时，上面的
+        // `isAttached && attachedShowsProviderFooter` 判据为假 → 代码会掉进下面的
+        // **预览**分支，把层挂到全屏底下的卡片上 —— 于是全屏整场都停在原生逐行。
+        //
+        // 判据不用新增状态：`fullscreenController` 是弱引用，且**在函数开头就记好了**
+        // （那时还没有数据判据），所以"它还在窗口里、且不在消失中"就等于"全屏开着"。
+        if !isAttached,
+           let controller = fullscreenController,
+           controller.isViewLoaded,
+           controller.view.window != nil,
+           !controller.isBeingDismissed,
+           !controller.isMovingFromParent {
+            writeDebugLog("[WordByWord] fullscreen is open but our layer is missing — attaching there")
+            if attach(
+                to: controller,
+                sideInset: fullscreenSideInset,
+                showsProviderFooter: true
+            ) {
+                return
+            }
         }
 
         // 预览层：歌词比卡片先到是常态（卡片要等数据才建），所以这里**不能**

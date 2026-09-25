@@ -165,6 +165,10 @@ enum InlineLyricsHostLocator {
             // 那些歌的层一旦因为卡片复用而掉下来，看门狗就永远不再把它挂回去 ——
             // 表现是"预览卡片里的歌词有时候自己没了、再也不回来"。
             guard hasUsableLineLevelData(currentLyricsDto) else { return }
+            // 先把"标记说全屏还挂着、其实那一层已经不在任何窗口里"的**残留**清掉 ——
+            // 否则下面那道闸门会把预览层永久挡在外面（真机：全屏里点几下歌词行再退出，
+            // 之后预览与后续每一首都退化成逐行/原生，重启才恢复）。
+            WordByWordHost.shared.clearStaleAttachmentIfNeeded()
             // ⚠️ 全屏层正挂在屏上时**绝不**重挂预览层 —— 那会把全屏的层拽回卡片。
             guard !WordByWordHost.shared.fullscreenOverlayIsAttached else { return }
             // 已经挂上、而且还在窗口里 → 什么都不用做（这是常态，开销只有几次判空）。

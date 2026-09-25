@@ -497,6 +497,71 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 17. 第六轮：全屏"小概率逐行" + 退出后"永久逐行"（PL 源 + AM 层）
+
+先说架构（用户提问确认过）：AM 层是**覆盖层** —— 自己一条 `UIHostingController` 视图挂到
+卡片容器/全屏 vc.view 上、每帧 `bringSubviewToFront`，原生歌词层原样留在下面
+（"接管原生视图"那条路被真机否掉过）。所以**原生层跟着每首 payload 走、内容是对的**，
+而我们这层的行模型只在 `currentLyricsVersion` 变化后被 `update()` 重建。
+
+### 17.1 全屏开着、我们的层却没挂上 → 层被挂到了全屏底下的卡片
+
+成因链：全屏页出现时歌词还在路上（PL 是两次请求的源，更容易撞上）→
+`viewWillAppear` / `viewDidAppear` 两次 `attach` 都因"连行级数据都没有"落空 →
+歌词到达时 `refreshForCurrentLyrics()` 里 `isAttached && attachedShowsProviderFooter` 为假 →
+代码掉进**预览**分支，把层挂到全屏底下那页的卡片上 → 全屏整场停在原生逐行 + 专辑色背景。
+
+**修复**（`LyricsWordByWord.x.swift` → `refreshForCurrentLyrics`）：在预览分支**之前**加一段
+"全屏页开着但我们的层没挂上 → 挂回全屏"。判据不新增状态 —— `fullscreenController` 是弱引用，
+且**在 `attach` 开头就记好了**（早于数据判据），所以"它在窗口里、且不在消失中"就等于全屏开着：
+
+```swift
+if !isAttached, let controller = fullscreenController,
+   controller.isViewLoaded, controller.view.window != nil,
+   !controller.isBeingDismissed, !controller.isMovingFromParent { attach(... showsProviderFooter: true) }
+```
+
+日志：`[WordByWord] fullscreen is open but our layer is missing — attaching there`
+
+### 17.2 退出全屏后**永久**退化（点了几下歌词行之后，切歌也一样）
+
+成因：`WordByWordHost.isAttached` / `attachedShowsProviderFooter` 是**纯布尔**，
+只有我们自己调 `detach()` 时才清。全屏 VC 被拆掉 / `viewWillDisappear` 没赶上时它会残留成
+"全屏还挂着"，而看门狗的闸门就是 `guard !fullscreenOverlayIsAttached else { return }`
+（`CustomLyrics+AllTracksLyrics.swift`）→ **预览层再也挂不回来**，切歌也一样，重启才恢复。
+这正好对上"点了几下歌词行再退出 → 预览与后续每一首都逐行"。
+
+**修复**：
+
+- `WordByWordHost.clearStaleAttachmentIfNeeded()`：标记说挂着、但那一层**不在任何窗口里**时清掉
+  （判据与既有的 `inlineOverlayIsLive` **同源**，所以不会误伤"真的全屏中"）→
+  日志 `[WordByWord] stale attachment cleared — the layer is not in any window (wasFullscreen=…)`；
+- 看门狗 `tick()` 在闸门**之前**调它 → 残留最多 1.5s（一个心跳）自愈。
+
+### 17.3 还有一种"逐行"是**设计如此**，不是 bug
+
+`hasUsableWordLevelData` 要求 **≥50% 的行**带逐词时间轴。PL / 网易云对一部分歌只给行级（lrc）、
+或词级数据不足，这时代码**故意**降级成"逐行 + 当前行整行点亮"（走旧层；在
+`displayOriginalColors = true` 时，旧层的背景就是**专辑纯色** —— 所以"逐行 + 专辑色背景"
+这个组合本身就是旧层的正常样子）。判据日志是
+`[WordByWord] word-level judge: … word-level=N`。
+
+### 17.4 复现时看这三行就能分开 17.1 / 17.2 / 17.3
+
+| 现象 | 判据 |
+|---|---|
+| 数据不够（设计内降级） | `[WordByWord] word-level judge: … word-level=N` |
+| 走了旧层（17.1 或 17.3） | `[WordByWord] legacy overlay attached … level=line` |
+| 残留标记卡死（17.2） | 退出全屏后切歌，**既没有** `[AppleMusicLyrics] overlay attached`，也**没有** `legacy overlay attached`，而 `word-level=Y`；修复后应能看到 `stale attachment cleared` |
+
+### 17.5 未验证
+
+两处改动**没有编译验证**（本机无 Swift 工具链），也**没有真机验证**。
+`isBeingDismissed` / `isMovingFromParent` 在 sheet 关闭动画期间的行为需要真机确认 ——
+若动画期间被误判成"全屏还开着"，表现只会是退出动画里闪一下，不会卡死（`attach` 自带 `detach` 前序）。
+
+---
+
 ## 16. 历史遗留（原 §9/§11/§13，位置随追加而后移）
 
 - ~~§0 的"两个面互斥、合成时间轴把卡片挤掉"~~ → **作废**，见 §7.3/§7.4：无时间轴并不产生卡片，
