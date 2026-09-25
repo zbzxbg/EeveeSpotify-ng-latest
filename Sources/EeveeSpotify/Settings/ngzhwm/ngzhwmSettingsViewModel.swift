@@ -9,9 +9,10 @@ class NgzhwmSettingsViewModel: ObservableObject {
     static let wordByWordLyricsKey = "ngzhwm_wordByWordLyrics"
     static let betterWordByWordLyricsKey = "ngzhwm_betterWordByWordLyrics"
     static let amllPreferredKey = "ngzhwm_amllPreferred"
-    static let hideOfficialLyricsKey = "ngzhwm_hideOfficialLyrics"
-    static let syntheticLineTimingKey = "ngzhwm_syntheticLineTiming"
-    static let injectLyricsCardElementKey = "ngzhwm_injectLyricsCardElement"
+    // 已移除三个 key（2026-09-25）：`ngzhwm_hideOfficialLyrics` /
+    // `ngzhwm_syntheticLineTiming` / `ngzhwm_injectLyricsCardElement` ——
+    // 它们对应的行为已在下面**写死启用**，不再读 UserDefaults。
+    // 旧设备上残留的键不再被读、也不会被清（留着无害）。
     static let blurredLyricsBackdropKey = "ngzhwm_blurredLyricsBackdrop"
     static let lyricsBackdropMaterialKey = "ngzhwm_lyricsBackdropMaterial"
 
@@ -59,12 +60,11 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// **不带 (EeveeSpotify) 后缀**），而且不会跟着我们的罗马化设置走，
     /// 看起来就像"来源设置没生效 / 罗马化设置失效"。
     ///
-    /// 默认**开启**：用户选定了某个来源，预期就是"要么显示这个来源的词，要么什么都不显示"，
-    /// 而不是"取不到就悄悄换成 Spotify 的"。想恢复官方歌词，关掉这一项即可
-    /// （或者在来源里选「禁用歌词替换」——那是明确要看官方歌词的模式）。
-    static var isOfficialLyricsHidden: Bool {
-        bool(forKey: hideOfficialLyricsKey, defaultValue: true)
-    }
+    /// ⚠️ **写死为 true**（2026-09-25）：这已经是修好的行为，不再是可选项 ——
+    /// 用户选定了某个来源，预期就是"要么显示这个来源的词，要么什么都不显示"，
+    /// 而不是"取不到就悄悄换成 Spotify 的"。
+    /// 想明确看官方歌词的模式仍然在：来源里选「禁用歌词替换」（`.notReplaced`）。
+    static var isOfficialLyricsHidden: Bool { true }
 
     /// 「模糊封面背景」是否生效。
     ///
@@ -96,22 +96,20 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// 从而走"同步歌词"渲染路径。**只影响注入给 Spotify 的 protobuf**，
     /// `currentLyricsDto` 与逐词 overlay 的判据都不变。
     ///
-    /// 默认**开启**（可用性优先）。想复现"无时间轴"的旧行为做 A/B 对比时关掉它即可。
-    static var isSyntheticLineTimingEnabled: Bool {
-        bool(forKey: syntheticLineTimingKey, defaultValue: true)
-    }
+    /// ⚠️ **写死为 true**（2026-09-25）：这是修好的行为（否则 Genius 这类纯文本源
+    /// 在 9.1.x 上等于"歌词模块不出现"），不再是可选项。
+    static var isSyntheticLineTimingEnabled: Bool { true }
 
-    /// 「给没有歌词卡片的曲目补一个卡片元素」（实验开关，默认**关闭**）。
+    /// 「给没有歌词卡片的曲目补一个卡片元素」。`Bool` 语义：**恒为启用**。
     ///
     /// 背景：真机取证发现 `scrollsita/v1/scroll/spotify:track:<id>`（正在播放页的**元素列表**）
     /// 只在"Spotify 自己有官方歌词"的曲目上多下发一个元素（内层字段号 5，只引用曲目 URI）。
     /// 三首样本 100% 吻合，而唯一一次肉眼看到歌词卡片正是那首有多下发元素的曲目。
     ///
-    /// 打开后，缺这一项的响应会被**补上这一项**（byte 级，只在能完整解析时动手，
+    /// 补上之后，缺这一项的响应会被写入这一项（byte 级，只在能完整解析时动手，
     /// 任何异常都原样放行）。见 `ScrollsitaLyricsElementInjector`。
     ///
-    /// ⚠️ 这是**验证假设**用的开关：先按默认（关）跑一遍，再打开跑一遍，两组对比。
-    static var isLyricsCardElementInjectionEnabled: Bool {
-        bool(forKey: injectLyricsCardElementKey, defaultValue: false)
-    }
+    /// ⚠️ **写死为 true**（2026-09-25）：假设已在真机验证（补上后卡片出现、内容来自我们注入的
+    /// payload），因此不再是实验开关 —— 否则"某些歌没有歌词卡片"会随这个开关的默认值回归。
+    static var isLyricsCardElementInjectionEnabled: Bool { true }
 }

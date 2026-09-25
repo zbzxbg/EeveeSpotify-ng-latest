@@ -45,41 +45,9 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
     
-    @Published var hideOfficialLyrics = NgzhwmSettingsViewModel.isOfficialLyricsHidden {
-        didSet {
-            UserDefaults.standard.set(
-                hideOfficialLyrics,
-                forKey: NgzhwmSettingsViewModel.hideOfficialLyricsKey
-            )
-        }
-    }
-    
-    /// 「给无时间轴的歌词补时间轴」。
-    ///
-    /// ⚠️ 初值必须走 `isSyntheticLineTimingEnabled`（默认 **true**），
-    /// 不能写 `UserDefaults.standard.bool(forKey:)` —— 后者在 key 未写入时是 false，
-    /// 会让开关初始显示为"关"，与真实生效状态相反。
-    @Published var syntheticLineTiming = NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled {
-        didSet {
-            UserDefaults.standard.set(
-                syntheticLineTiming,
-                forKey: NgzhwmSettingsViewModel.syntheticLineTimingKey
-            )
-        }
-    }
-
-    /// 「给没有歌词卡片的曲目补一个卡片元素」（实验开关，默认**关闭**）。
-    ///
-    /// 同 `syntheticLineTiming`：初值必须走默认值 getter，不能用
-    /// `UserDefaults.standard.bool(forKey:)`（key 未写入时是 false，会与真实状态相反）。
-    @Published var injectLyricsCardElement = NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled {
-        didSet {
-            UserDefaults.standard.set(
-                injectLyricsCardElement,
-                forKey: NgzhwmSettingsViewModel.injectLyricsCardElementKey
-            )
-        }
-    }
+    // 已移除三个开关（2026-09-25）：`hideOfficialLyrics` / `syntheticLineTiming` /
+    // `injectLyricsCardElement` —— 它们对应的行为已经在 `NgzhwmSettingsViewModel` 里
+    // **写死启用**（见那三个 getter 的说明），设置页不再暴露、也不再写 UserDefaults。
     
     // 注：背景相关（模糊封面 / 系统材质）**没有** Published 属性 ——
     // 它们不是用户可选项，而是跟随「更好的逐词歌词」自动启用。

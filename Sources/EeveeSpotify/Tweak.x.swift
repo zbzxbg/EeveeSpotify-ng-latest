@@ -367,13 +367,11 @@ struct EeveeSpotify: Tweak {
         writeDebugLog("[INIT] Hook target: \(EeveeSpotify.hookTarget)")
         writeDebugLog("[INIT] Patch type: \(UserDefaults.patchType)")
         writeDebugLog("[INIT] Lyrics source: \(UserDefaults.lyricsSource)")
-        // A/B 的**分组标记**：日志里必须能一眼看出这一轮跑的是哪一组。
-        //
-        // 「合成行级时间轴」默认开 —— 按 2026-09-25 的推论，正是它把 payload 标成
-        // `timeSynchronized = true`，于是 Spotify 只画封面下那一行（面 A）而不建
-        // 「歌词」卡片（面 B）。可这个开关以前**只能从"有没有 synthetic line timing
-        // applied"反推**，而"关掉它"那一组恰恰不会打那行 —— 两组日志长得一样，
-        // A/B 等于没分组。补这一行把它钉死（顺带记下另外两个影响 payload 的开关）。
+        // 三个**写死启用**的修复 + 一个真开关，一次打出来：
+        //   · 合成行级时间轴 / 隐藏官方歌词 / 补卡片元素 —— 2026-09-25 起写死在
+        //     `NgzhwmSettingsViewModel` 里（恒为 ON），这里记的是**实际生效值**；
+        //   · 禁用歌词功能 —— 仍然是用户开关，值是它自己。
+        // 这行同时是排障时的"这一轮跑的是哪一档"标记（以前 A/B 就靠它分组）。
         writeDebugLog(
             "[INIT] synthetic line timing: "
                 + "\(NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled ? "ON" : "OFF")"

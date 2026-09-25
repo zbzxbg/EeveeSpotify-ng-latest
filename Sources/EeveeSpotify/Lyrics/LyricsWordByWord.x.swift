@@ -1549,7 +1549,7 @@ final class WordByWordHost {
                 // 那时 `refreshLinesIfNeeded()` 的 guard 会直接返回，而全屏页的
                 // appear 回调不会再来 —— 新歌词就永远推不进去。所以这里要能补挂一次。
                 if NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled,
-                   hasUsableLineLevelData(currentLyricsDto),
+                   hasUsableWordLevelData(currentLyricsDto),
                    AppleMusicLyricsOverlayHost.shared.overlayView == nil,
                    let controller = fullscreenController {
                     writeDebugLog("[WordByWord] fullscreen layer was dropped — reattaching")
@@ -1716,15 +1716,13 @@ final class WordByWordHost {
         // 用户要的只是"壳的观感一致"，不是"把歌词也换掉"——
         // 曾经试过让旧层也走新页面（连歌词一起换），被退回来了。
         //
-        // ⚠️ 判据是**行级**（`lineLevelUsable`）而不是逐字（`usable`）：
-        // AM 页自己就会处理"只有行级时间轴"的数据 ——
-        // `SynchronizedLyricText.resolvedText` 在没有逐字时退回普通文本，
-        // `LyricLine.makePseudoSyllables()` 更是专门为 LRCLIB / Genius 这类
-        // "没有逐字时间轴"的来源按字均分整行时长（注释里写得很清楚）。
-        // 以前这里要求逐字，于是**行级数据只能掉回旧层**，真机观感就是
-        // "内容明明是逐行，背景与壳却是普通逐词那一套"。
+        // ⚠️ 判据是**逐字**（`usable`），不是"只要有行级就行" —— 这是**产品规则**：
+        //   · 「更好的逐词歌词」开 **且** 来源给了逐词数据 → AM 渲染 + 透明化专辑底；
+        //   · 普通逐词（AM 关）与逐行（没有逐字）→ 旧层 + **Spotify 自己的默认颜色**。
+        // 第九轮我把这里放宽成了 `lineLevelUsable`，结果是"逐行歌词也套上了 AM 的底"，
+        // 真机反馈原话："怎么逐行歌词的背景变成 am 的了"。**已回退**，别再放宽。
         if #available(iOS 26.0, *),
-           lineLevelUsable,
+           usable,
            NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabled {
             // ⚠️ 这里**不碰任何原生视图**：不隐藏、不清底色、不动 z 序。
             //
@@ -2257,7 +2255,11 @@ final class WordByWordHost {
     ///
     /// 判据：在窗口里、没被隐藏、尺寸像个歌词区（宽 > 120、高 > 60）、
     /// 中心点在窗口内、且至少一半面积可见。
-    static func isVisibleOnScreen(_ view: UIView) -> Bool {
+    ///
+    /// ⚠️ `nonisolated`：它是个**纯几何判据**（只读 `window`/`isHidden`/`alpha`/frame），
+    /// 而 `InlineLyricsHostLocator`（非 MainActor 隔离的 enum）在找宿主时也要用它 ——
+    /// 见那里 `viewHost(in:)` 的说明。加隔离标注会让那次调用变成编译错误。
+    nonisolated static func isVisibleOnScreen(_ view: UIView) -> Bool {
         guard let window = view.window,
               window.bounds.width > 1,
               window.bounds.height > 1 else { return false }

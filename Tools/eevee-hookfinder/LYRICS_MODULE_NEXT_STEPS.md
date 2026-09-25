@@ -497,6 +497,75 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 23. 第十二轮：三个修复**写死启用**，去掉开关
+
+用户要求（原话）："隐藏官方歌词、补时间轴、补卡片这三个应该就是写在代码里写启用的，而不是靠选项来控制关闭。"
+
+| 原来 | 现在 |
+|---|---|
+| `isOfficialLyricsHidden`（读 `ngzhwm_hideOfficialLyrics`，默认 true） | 恒 `true`（来源里选「禁用歌词替换」仍是"我要看官方歌词"的正式入口） |
+| `isSyntheticLineTimingEnabled`（读 `ngzhwm_syntheticLineTiming`，默认 true） | 恒 `true` |
+| `isLyricsCardElementInjectionEnabled`（读 `ngzhwm_injectLyricsCardElement`，**默认 false**） | 恒 `true`（假设已真机验证：补上后卡片出现） |
+
+改动面（都已清干净，`grep` 过没有残留引用）：
+
+- `Settings/ngzhwm/ngzhwmSettingsViewModel.swift`：三个 key 常量删除；三个 getter 改成 `{ true }`，
+  文档注明"这是修好的行为，不是可选项"；
+- `EeveeLyricsSettingsViewModel`：三个 `@Published` 属性删除（连带写入 UserDefaults 的 `didSet`）；
+- `EeveeLyricsSettingsView`：三个 Section 与其调用点删除；
+- `+setupBindings`：`logBooleanSetting($hideOfficialLyrics, …)` 删除；
+- `en.lproj` / `zh-CN.lproj`：六个键（3 × 标题 + 说明）删除 —— 全仓库只有这两个 locale，保持一致；
+- `Tweak.x.swift` 的 `[INIT]` 那行保留：它现在记录的是**实际生效值**（恒 ON）+ 「禁用歌词功能」这个真开关。
+
+**保留为真开关的**：「禁用歌词功能」（`isLyricsFeatureDisabled`）、「更好的逐词歌词」、
+「逐词歌词」、来源选择、以及「禁用歌词替换」（`.notReplaced`）。
+
+**未验证**：无编译验证（本机无 Swift 工具链）。三个 getter 变常量后，调用点一行没动
+（`if`/`&&` 里的常量会被优化掉）；`shouldModify` 现在对 `scrollsita` 永远返回 true
+（会多走一次"缓冲 + 原样回放"），响应只有几百字节，代价可忽略。
+
+---
+
+## 22. 第十一轮：**"原本有逐字的歌突然没有逐字了"** —— 不是数据丢了，是宿主再也挂不上
+
+**先排除数据**：日志 25（NE 源）里三个"有逐字"的歌，仓库侧全都正常返回了逐词数据：
+
+```
+[NetEase] eapi /api/song/lyric/v1 → yrc 8854 chars, ytlrc 1072 chars
+[NetEase] Word-by-word (yrc) lyrics — 49 line(s)
+[AppleMusicLyrics] overlay attached (Apple Music path) host=…CardView     ← 03:18:49，逐词高亮正常
+[AppleMusicLyrics] L0 t=0.13 word(6) "Hanabira ga chuu ni uita" …
+```
+
+**真正的分水岭是 03:18:57**（切到 `Blue Contrast`，那首 `yrc absent`）：
+
+```
+03:18:57 [AppleMusicLyrics] overlay detached
+03:18:57 [WordByWord] ⚠️ preview host off-screen (Lyrics_TextElementImpl.LyricsTextView) — will retry
+03:18:57 [WordByWord] attach declined — preview host off-screen (likely a recycled cell view) …
+… 之后**每 1.5s 一次、再也不成功**，包括 03:19:15 的 SECRET 与 03:19:51 的ただ声一つ（两首都有 yrc）
+```
+
+于是屏幕上只剩 Spotify 原生那层（逐行），用户观感就是"**原本有逐字的歌没有逐字了**"。
+
+**根因**（`CustomLyrics+AllTracksLyrics.x.swift` → `InlineLyricsHostLocator.viewHost(in:)`）：
+选宿主时用的判据是 `view.window != nil`，并把它当作"真的看得见"**直接 return**。但
+**复用中的 cell 仍然持有 window** —— 离屏的复用 cell 因此会被当成命中项返回，
+而 `attach` 随后用更严的 `isVisibleOnScreen`（要求中心点在窗口内、≥50% 面积可见）把它拒掉。
+两者口径不一致 ⇒ 看门狗每 1.5s 命中同一个离屏宿主、每 1.5s 被拒，**可见那一份永远轮不到**。
+
+**修复**：
+
+1. `viewHost(in:)` 的命中判据升级为 `view.window != nil && WordByWordHost.isVisibleOnScreen(view)`，
+   不满足的降级为 `fallback`（继续扫其它候选）；
+2. `WordByWordHost.isVisibleOnScreen` 标成 `nonisolated`（纯几何判据），
+   否则从非 MainActor 的 `InlineLyricsHostLocator` 调用是编译错误。
+
+**待验证**：切到"没有逐字"的歌再切回"有逐字"的歌，逐词高亮应当照常回来
+（而不是永久退化成原生逐行）；日志里 `attach declined — preview host off-screen` 不应再无休止刷。
+
+---
+
 ## 21. 第十轮：那张"很怪的全屏"是什么 + 译文到底哪来的
 
 **照片 `10-49-29`（全屏）的判读**：
@@ -528,9 +597,11 @@ let suppliesTranslation = !NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabl
 
   ⇒ 所以"AM 开着还能看到译文"这件事，反过来正好证明**那一刻用的是旧层** ✔
 
-**收敛到同一个根因**：§20 已把"只有行级时间轴"的数据改走 AM 页 —— 这类
-"逐行内容 + 旧层全屏外壳"的组合应当随之消失（全屏会变成 AM 页那套：标题/歌手/关闭/底部控件）。
-若新构建后仍出现，再按 §17 的两个候选查（"划动收起壳"状态 / 宿主挂错）。
+**§20 的正确读法（该节曾改错并回退）**：**行级数据本来就该走旧层、用 Spotify 默认色**；
+那张"怪全屏"是旧层的全屏外壳（标题栏贴 overlay 顶部、底部是它自己的进度条 + 三键），
+它看起来"怪"只是因为**它跟 AM 页不是同一套壳** —— 这是设计，不是 bug。
+真正要修的只有它**没有把标题/歌手/关闭画出来**那一层（若新构建后仍缺，按 §17 的两个候选查：
+"划动收起壳"状态 / 宿主挂错）。
 
 **关于"预览显示上首歌的译文"**：那还是 §18 的陈旧行模型（预览里 `showsTranslation=false`，
 所以你看到的"译文"其实是上一首的**罗马化歌词行**，看起来像译文）。§18 的"切歌即清 + 渲染前比对曲目"
@@ -557,14 +628,23 @@ let suppliesTranslation = !NgzhwmSettingsViewModel.isBetterWordByWordLyricsEnabl
 - `SynchronizedLyricText.resolvedText`：`syllables.isEmpty` → 退回普通文本（有渲染低档）；
 - `LyricLine.makePseudoSyllables()`：注释原话"均匀按「字」拆分整行时长，**用于没有逐字时间轴的来源（LRCLIB / Genius 等）**"。
 
-**修复**（`LyricsWordByWord.x.swift`）：
+**这一轮改错了，已回退（同日）**：我把闸门放宽到行级，结果是"**逐行歌词也套上了 AM 的透明化专辑底**"，
+真机反馈原话："怎么逐行歌词的背景变成 am 的了"。
 
-1. `WordByWordHost.attach` 的 AM 分支判据：`usable` → **`lineLevelUsable`**（只要挂得上这一层就走 AM 外观）；
-2. `refreshForCurrentLyrics()` 里"全屏层掉了要补挂"的条件同样从 `hasUsableWordLevelData`
-   改成 `hasUsableLineLevelData`（否则行级歌的全屏层一旦掉了就补不回来）。
+**产品规则（以此为契约，别再放宽）**：
 
-**待验证**：那些"只有行级"的来源现在应统一走 AM 外观（整行高亮 / 伪逐字），
-不再出现"逐词的背景 + 逐行的内容"；`[WordByWord] legacy overlay attached … level=line` 应基本消失。
+| 条件 | 渲染层 | 背景 |
+|---|---|---|
+| 「更好的逐词歌词」开 **且** 来源给了**逐词**数据 | Apple Music 页 | 透明化专辑（AM 底） |
+| 普通逐词（AM 关，有逐词数据） | 旧层 | **Spotify 自己的默认颜色** |
+| 逐行（来源只给行级时间轴） | 旧层 | **Spotify 自己的默认颜色** |
+
+回退点：`WordByWordHost.attach` 的 AM 分支判据回到 `usable`；
+`refreshForCurrentLyrics()` 里"全屏层掉了要补挂"的条件回到 `hasUsableWordLevelData`。
+
+**顺带记一笔**：AM 页**确实**能渲染行级数据（`SynchronizedLyricText` 有普通文本回退、
+`makePseudoSyllables()` 就是给 LRCLIB / Genius 这类无逐字源用的）—— 但"能渲染"不等于"该用"，
+按上面的规则，行级一律走旧层（这也意味着旧层不能退化：它的背景必须是 Spotify 默认色）。
 
 ---
 

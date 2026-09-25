@@ -314,8 +314,17 @@ enum InlineLyricsHostLocator {
                 while let current = responder {
                     if let vc = current as? UIViewController {
                         let match = HostMatch(controller: vc, contentView: view)
-                        // 在窗口里的才算"真的看得见"，离屏的只作为兜底。
-                        if view.window != nil { return match }
+                        // ⚠️ 判据从"在窗口里"升级为"**真的在屏幕上**"（`isVisibleOnScreen`）。
+                        //
+                        // 复用中的 cell **仍然持有 window**，只看 `view.window != nil` 会把
+                        // 离屏的复用 cell 当成命中项**直接 return** —— 而 `attach` 随后用更严的
+                        // `isVisibleOnScreen` 把它拒掉，于是看门狗每 1.5s 命中同一个离屏宿主、
+                        // 每 1.5s 被拒，屏幕上那份歌词**永远挂不上**。
+                        //
+                        // 真机日志 25（NE 源）：03:18:57 那次切歌之后，所有曲目都只剩
+                        // `⚠️ preview host off-screen … attach declined`，包括本来有 yrc 的歌 ——
+                        // 用户看到的就是"原本有逐字的歌没有逐字了"。
+                        if view.window != nil, WordByWordHost.isVisibleOnScreen(view) { return match }
                         if fallback == nil { fallback = match }
                         break
                     }
