@@ -136,6 +136,7 @@ word_by_word_lyrics_provider = "Word-by-word Lyrics provider: %@";
 ngzhwm_synthetic_line_timing = "Fill in Missing Lyric Timing";
 ngzhwm_inject_lyrics_card_element = "Add a Lyrics Card to Tracks Without One";
 ngzhwm_lyrics_entry_point_flag = "Force Lyrics Entry Point Flag";
+ngzhwm_disable_npv_prerelease_provider = "Hide the Stale \u201cComing Soon\u201d Card";
 ngzhwm_multi_level_fallback = "Multi-level Fallback";
 ngzhwm_multi_level_fallback_description = "This feature does not work well on this version. Multi-level Fallback: lyrics are searched through multiple providers in this order: Musixmatch → PetitLyrics → LRCLIB → Genius. Musixmatch and PetitLyrics are given up to 5 seconds each, while LRCLIB and Genius are given up to 3 seconds each; if a provider has not returned lyrics within its time limit, the next provider is queried.";
 ngzhwm_netease_romaji_local = "Modify How NetEase Japanese Romaji Is Displayed";

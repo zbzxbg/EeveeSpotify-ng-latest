@@ -635,6 +635,76 @@ enum WordByWordPlaybackControl {
         writeDebugLog("[ShellText] ---- end ----")
     }
 
+    // MARK: - 预热卡文案 **轮询** dump（2026-09-26 第二轮，日志 12 之后新增）
+
+    /// 上面那个 `dumpVisibleTexts()` 是"某一刻拍一张"，而日志 11/12 证明**拍不到卡**：
+    ///
+    /// · 日志 11：`Aurora` 那次 dump 落在"刚交还原生、卡还没起"的空档，0 条 `[DATE]`；
+    /// · 日志 12：`Dissonance` 那次 dump 抓的是**主页 Home**（`已点赞的歌曲` / `最近播放`
+    ///   / `MUSIC`…），连正在播放页都不是 —— 因为在哪个页面调它，不由我们决定。
+    ///
+    /// 卡是**挂载之后几秒**才渲染出来的，一次性的快照天然撞不上。所以这里改成**轮询**：
+    /// 装好之后每隔一秒扫一遍窗口文字，**只在发现"之前没见过的 `[DATE]` 行"时打日志**
+    /// （去重，不会刷屏），并且第一次看到任何文字时先打一份完整快照。
+    ///
+    /// 生命周期：`startTextWatch()` / `stopTextWatch()`，由调用方在进入/离开正在播放页时配对。
+    /// 只读、只打日志、**不改任何视图、不注册任何手势**。
+    private static var textWatchTimer: Timer?
+    private static var seenTextLines: Set<String> = []
+    private static var textWatchDidSnapshot = false
+
+    /// 开始轮询（重复调用无副作用）。
+    static func startTextWatch() {
+        guard textWatchTimer == nil else { return }
+        seenTextLines.removeAll()
+        textWatchDidSnapshot = false
+        // 1s 一拍。卡的出场窗口在日志里是"挂载后 0–10s"，1s 足够密。
+        let timer = Timer(timeInterval: 1.0, repeats: true) { _ in
+            DispatchQueue.main.async { pollVisibleTextsOnce() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        textWatchTimer = timer
+        // 立刻先来一拍，别等到第 1 秒。
+        pollVisibleTextsOnce()
+    }
+
+    /// 停止轮询（离开正在播放页 / 交还原生时调用）。
+    static func stopTextWatch() {
+        textWatchTimer?.invalidate()
+        textWatchTimer = nil
+        seenTextLines.removeAll()
+        textWatchDidSnapshot = false
+    }
+
+    /// 一拍：抓当前窗口文字，只打"新出现的 `DATE` 行"。
+    private static func pollVisibleTextsOnce() {
+        guard let window = keyWindow else { return }
+        var lines: [String] = []
+        collectTexts(in: window, window: window, into: &lines)
+        guard !lines.isEmpty else { return }
+
+        // 首拍打一份完整快照 —— 这样即使卡在第一秒之前就已经在了，也留得下证据。
+        if !textWatchDidSnapshot {
+            textWatchDidSnapshot = true
+            writeDebugLog("[ShellText] ---- first snapshot (\(lines.count)) ----")
+            for line in lines.prefix(120) { writeDebugLog("[ShellText] \(line)") }
+            writeDebugLog("[ShellText] ---- snapshot end ----")
+            for line in lines { seenTextLines.insert(line) }
+            return
+        }
+
+        // 之后只报增量，避免每秒刷一屏。
+        let fresh = lines.filter { !seenTextLines.contains($0) }
+        guard !fresh.isEmpty else { return }
+        for line in lines { seenTextLines.insert(line) }
+
+        // 增量里只有含日期的才值得打（其它多半是列表行滚动出来的噪音）。
+        let datish = fresh.filter { $0.hasPrefix("[DATE]") }
+        guard !datish.isEmpty else { return }
+        writeDebugLog("[ShellText] ★ NEW DATES (\(datish.count)) ★")
+        for line in datish.prefix(40) { writeDebugLog("[ShellText] \(line)") }
+    }
+
     /// 文字里是否含"看起来像日期"的东西。
     ///
     /// 判据刻意放宽：**四位数字连排**（`2021` / `2023`，年份）或中文 `年月日`。

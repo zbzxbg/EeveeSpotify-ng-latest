@@ -497,6 +497,93 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 45. 解密二进制定位：这张卡是 `PrereleaseCardNowPlaying`，数据源是「正在播放页专用 provider」（2026-09-26）
+
+**材料**：`C:\dsh\ipa\Spotify- Music and Podcasts_9.1.86_decrypted.ipa`
+（主二进制 `Payload/Spotify.app/Spotify`，241,175,152 字节，单 arm64 slice）。
+分析脚本（**只读**，本轮新增在 `Tools/eevee-hookfinder/_prerel_probe/`）：
+`find_prerelease_strings.py` / `find_prerelease_symbols.py` / `prerel_component_sweep.py` /
+`macho_layout.py` / `swift_fieldmd.py` / `dump_descriptor_bytes.py` / `objc_classlist_check.py`。
+
+### 45.1 卡的组件身份（明文类名 + 其旁边的字符串）
+
+```
+Prerelease.UI.PrereleaseCardNowPlaying              ← 卡本体（Prerelease_ECMKit/PrereleaseCardNowPlayingUI.swift）
+Components.UI.PrereleaseButtonPreSave               ← 「预收藏」按钮（日志 2 的 ShellDump 抓到过同名 id）
+Components.UI.Prererease.ContextMenuButton / MetadataRowPrerelease / VideoHeaderPrerelease
+sPrereleaseCardNowPlayingTitle                      ← 卡标题
+sPrereleaseCardNowPlayingReleaseFallbackSubtitle    ← ★「发行兜底副标题」= 已发行时显示的那条副标题
+sPrereleaseMetadataRowReleaseType / …Ep
+Prerelease_ECMKit.CountdownView / CountdownUnitView / ImageCountdownView
+```
+
+**实例类**（`_TtCOOO17Prerelease_ECMKit24PrereleaseCardNowPlaying2UI7Private…`）：
+
+```
+_TtCOOO17Prerelease_ECMKit24PrereleaseCardNowPlaying2UI7Private9MediaView
+_TtCOOO17Prerelease_ECMKit24PrereleaseCardNowPlaying2UI7Private13CountdownView
+```
+
+### 45.2 数据源：正在播放页**专用**的 provider（不是通用 prerel 服务）
+
+```
+_TtC37Prerelease_NowPlayingViewProviderImpl38PrereleaseNowPlayingScrollDataProvider   ← ★ 就是它把卡塞进 NPV
+_TtC37Prerelease_NowPlayingViewProviderImpl33NowPlayingViewProviderServiceImpl
+com.spotify.service.prerelease.nowplayingviewprovider
+ios-prerelease-nowplayingviewprovider-impl.is_enabled                                 ← 这一族的总闸
+mobile-now-playing-view-prerelease-scroll-card                                        ← 后端给的卡标识
+```
+
+provider 类名旁边的字段/字符串（同一簇）：`Prerelease { albumUri, releaseTime, prereleaseUri,
+cover, agents, listeningParty, videoPreviews, playSingleTrack, tracklistPreviews, copyright }`、
+`MData_PrereleaseExtensionKit.Prerelease`（`Entity` / `Agent` / `Image` / `Copyright`）、
+`upcoming_album_card` / `upcoming_album_section` / `album-pre-releases`。
+
+**"已发行"分支本来就存在**（这就解释了坏卡为什么显示**绝对日期**而不是倒计时）：
+
+```
+sCountdownReleasedText / sCountdownTodayText / sCountdownTomorrowText
+countdownExpired / countdownCompleted / countdownFinished / PrereleaseCountdownFormatter
+PrereleasePresaveFormatter / setEndDate: / prereleaseEndDate / _prereleaseEndDate / endDate
+```
+
+### 45.3 由此得到的因果链（与本文件此前所有观测一致）
+
+```
+曲目 manifest **没有 12**  →  客户端去"入口排"找卡（旁路三连 503/404/404）
+    →  服务端没给卡  →  回退到本地那份 prerelease 记录
+    →  provider 把它当"即将发布"喂给 PrereleaseCardNowPlaying
+    →  该记录的 releaseTime 已过期  →  卡渲染"已发行"分支：绝对日期 + 预收藏
+```
+
+正版卡走的是另一条：manifest **有 `12`** → 服务端明确要求渲卡 → `releaseTime` 在未来 → 倒计时文案。
+**`releaseTime` 是这一切的判据字段。**
+
+### 45.4 可用的修法（按代价从低到高）
+
+| 方案 | 落点 | 代价 / 风险 |
+|---|---|---|
+| **A. 关掉整个 NPV 预热 provider** | `ios-prerelease-nowplayingviewprovider-impl.is_enabled` 钉成 false | 正在播放页**再也不会**出现预热卡（专辑页 / 关注页的 prerel 面不受影响） |
+| **B. 精确过滤已发行** | 让 provider 丢掉 `releaseTime <= now` 的条目（或把 `endDate` 改成过去，触发 `countdownExpired`） | 需要能 hook 到那个 provider（见 45.5） |
+| **C. 渲染层摘卡** | `NPVScrollViewController` 的子视图里，判 `Prerelease.UI.PrereleaseCardNowPlaying` + 已过期 → 摘掉 | 不碰数据，但"接管原生视图"风险高；且坏卡曲目上我们的歌词层**不挂载**（无逐词数据），必须挂在页面级 |
+
+### 45.5 ⚠️ 未解决：静态无法确认这个 provider 能不能 hook
+
+- `PrereleaseNowPlayingScrollDataProvider` / `NowPlayingViewProviderServiceImpl` /
+  `PrereleaseCardNowPlaying` **没有出现在 `__objc_classname`**（该节里只有独立的 `Prerelease` 一个词，
+  是别的东西）⇒ 极可能是**纯 Swift 类型、无 ObjC 暴露**；
+- 但 Orion 支持**点号形式**的 Swift target（本仓库已在用：
+  `NowPlaying_ScrollImpl.NPVScrollViewController`、`_TtC24Connectivity_SessionImpl18SessionServiceImpl`），
+  所以**能不能 hook 必须真机试**，静态判断不了：
+  `ClassHook(targetName: "Prerelease_NowPlayingViewProviderImpl.PrereleaseNowPlayingScrollDataProvider")`
+  → 命中就打点，`targetNotFound` 就换 `NowPlayingViewProviderServiceImpl`。
+- 本轮尝试解析 `__swift5_types` 的 nominal descriptor 拿**字段名**：`__swift5_reflstr` 里确实
+  有 `releaseTime`（与 45.2 一致），但 descriptor 的相对指针基准没对（`__swift5_fieldmd`
+  读出来 fields=4285471866 这种荒谬值），**字段表没解出来**；`__objc_classlist` 的 21,122 条
+  也没解析成功。两处都只影响"静态拿方法名"，不影响 45.1–45.4 的结论。
+
+---
+
 ## 41. 抓卡片的最后一条路：**UI 文字 dump**（2026-09-26）
 
 ### 41.1 为什么必须走到这一步
@@ -551,6 +638,233 @@ if let originalColors { $0.colors = originalColors }
 
 拿到**真实字符串**（比如"2021年5月27日"或"在 6 天内发布"的本地化文案）之后，
 就能反查它是哪个视图类 / 哪份本地数据喂进去的 —— 这是唯一还没试过的手段。
+
+---
+
+## 42. 日志 11（`Aurora`）：**旁路三连 = 坏卡的确切指纹，已二次复现**；`[ShellText]` 需要改成轮询（2026-09-26）
+
+用户给了卡面文案，本页第一次拿到"正确答案"：
+
+> 即将发布 / **发布时间：2021年12月3日** / Aurora 2021 即将发布的新歌 / 预收藏
+
+曲目 `Aurora` - KSLV Noh，id `6ZYeEg57F7UZz6mZgKhlUw`。
+
+### 42.1 坏卡时刻（与 §40 的 Biohazard 完全同构）
+
+```
+12:21:48  [Scrollsita] manifest track=…6ZYeEg57F7UZz6mZgKhlUw body=413B has5=false
+            elements=[2{artist:2ElMqlv5py0QFIVXUff627,…6cGq1L} 3{…1XJEwt} 4{…}]
+            ← 无 12、无 5
+12:21:48  resp #363  503  spotify.liveeventdistribution.v1.EventCardInfoService/EventCardInfo
+12:21:49  [NPVModule] 404  cultural-moments-entrypoints/v1/entrypoint
+            body: {"code":5,"message":"No entrypoint is defined for entity_uri 'spotify:track:6ZYeEg…'"}
+12:21:49  [NPVModule] 404  merch-npv-service/v1/merch/track/6ZYeEg57F7UZz6mZgKhlUw
+            body: {"code":5,"message":"No artists with merch for track_id 6ZYeEg…, album_id 6yUZsjAcDt2wXIJtqjGagI"}
+────────────────────────────────────────────────────────────────
+12:22:06  [Scrollsita] manifest track=…6ZYeEg57F7UZz6mZgKhlUw body=413B has5=false
+            elements=[…逐字节相同…]         ← 一条旁路都不发
+```
+
+**同一份日志、同一首曲目、manifest 一模一样，唯一差别是"这次要不要去找卡"。**
+与 §40 Biohazard（09:52:08 发三连 / 09:52:34 一条不发）是同一个模式 —— 两次独立复现，可以定性。
+另外本日志里 `album_id 6yUZsjAcDt2wXIJtqjGagI` 是**第一次**从旁路响应里拿到 Aurora 的 album id（之前拿不到）。
+
+### 42.2 `[ShellText]` 跑了 5 次，**全部 0 条 `[DATE]`**
+
+dump 时刻与行数：
+
+| 时刻 | 行数 | 当时在播 |
+|---|---|---|
+| 12:18:40 | 301 | 不在 Aurora |
+| 12:18:46 | 370 | 不在 Aurora |
+| 12:18:49 | 311 | 51sEKNg…（有 concert 的那首） |
+| 12:19:05 | 368 | 已切回 KSLV 列表 |
+| 12:22:06 | 352 | **Aurora**，但此刻是 `usable=false` 刚交还原生、卡还没起 |
+
+抓到的东西**全是正在播放页下方的曲目行**（`Disaster's End, KSLV Noh`、400+ 行 `Encore7ListRow`、
+`SPTEncoreLabel`），`即将发布 / 发布时间 / 预收藏` 三词在整份日志里 **0 命中**。
+`[ShellDump]` 在日志 11 里 **0 行**（这版构建没触发）。
+
+**根因（不是探针写错了，是时机）**：`dumpVisibleTexts()` 只在 **AM 渲染分支挂载那一刻**调用一次，
+而坏卡是**挂载之后**才被渲染出来的。12:22:06 那次 dump 正好落在"交还原生 → 卡还没起"的空档里。
+
+### 42.3 反向佐证：卡是真 UIKit 控件
+
+日志 2（2026-09-26 01:42:35）的 `[ShellDump]` 抓到过：
+
+```
+[ShellDump] …Button9Secondary label="取消保存"
+            id="Components.UI.PrereleaseButtonPreSave" frame=(274,527 104x32)
+```
+
+`label="取消保存"` = **已预收藏**状态，与用户给的卡面"预收藏"吻合。
+⇒ 卡确实在 UIKit 层，`dumpVisibleTexts` 只是**没覆盖到它的出场窗口**。
+
+### 42.4 下一步（两件事，都等用户点头）
+
+1. **A/B 判定 flag**（不动代码就能做）：
+   关掉设置里「强制歌词入口开关」（`ngzhwm_lyricsEntryPointFlag`），
+   复现 `Aurora` → 看日志里 `[NPVModule]` 三行在不在。
+   - 三行消失 ⇒ 就是它，收窄钉 true 的条件；
+   - 三行还在 ⇒ 与我们无关，换方向（客户端自己拿过期缓存渲的）。
+   **判读用"三行在不在"，不用"卡有没有出现"** —— 卡是间歇的，旁路请求是确定的。
+
+2. **`[ShellText]` 改轮询**（要改代码）：
+   现在的"挂载跑一次"覆盖不到卡的出场。改成**每秒扫一次、只在首次出现新 `[DATE]` 时打一行**，
+   顺带把"卡出现的时刻"钉进日志。这样即使卡是几秒后才冒出来也能抓到。
+
+### 42.5 结论一句话
+
+- 坏卡判定指纹 = **manifest 无 `12` → 紧跟 EventCardInfo 503 + cultural-moments 404 + merch 404**。
+- 日期 100% 来自**客户端本地实体缓存**（请求清单里到现在都没有 album / entity / metadata 接口）。
+- 首要嫌疑仍是 `lyrics_entry_point_enabled` flag，等 A/B。
+
+---
+
+## 43. 日志 12（`Dissonance`）：**第三次复现**；"一次性快照"这条路判定为死路 → 改轮询（2026-09-26）
+
+### 43.1 第三次同构复现
+
+曲目 `Dissonance` - KSLV Noh，id `6KI6BuwRs9kaeTeiYXZuCl`：
+
+```
+12:30:53  manifest body=373B has5=false elements=[2, 3, 4]        ← 无 12
+12:30:53  503  EventCardInfoService/EventCardInfo                  ← 旁路①
+12:30:54  404  cultural-moments-entrypoints/v1/entrypoint           ← 旁路②
+12:30:54  404  merch-npv-service/v1/merch/track/6KI6BuwR…           ← 旁路③
+12:31:05  再次加载同一曲目：manifest 逐字节相同、**旁路一条不发**
+```
+
+三次独立复现（Biohazard 日志10 / Aurora 日志11 / Dissonance 日志12），**指纹成立**。
+
+### 43.2 决定性的一条：`[ShellText]` 快照这次抓的是**别的页面**
+
+日志 12 只有 **1 次** `[ShellText]` dump（12:31:05，225 行），但内容里：
+
+- `已点赞的歌曲` / `最近播放` / `为你推荐的新歌热播` / `你的个人资料和设置` / `夜空を感じるJ-Pop` / `phonk?`
+- 全是**主页 Home** 的区块标题
+- **`NowPlaying_ScrollImpl` / `Lyrics_TextElementImpl` / `NPVScroll` 命中数 = 0**
+
+⇒ 这次快照压根**不在正在播放页**。同一个 `dumpVisibleTexts()` 挂在 `attach()` 里，
+而 `attach()` 被谁在什么时机调用、当时用户在哪一页，**不由我们决定**。
+日志 11 是"撞在空档"，日志 12 是"撞在别的页面" ——
+
+**"某一刻拍一张"这条路判定为死路**，不再加更多快照点。
+
+### 43.3 改成轮询（已实现）
+
+在 `WordByWordPlaybackControl`（`AppleMusicLyricsPlaybackControl.swift`）新增：
+
+```swift
+static func startTextWatch()   // 装表；重复调用无副作用（guard textWatchTimer == nil）
+static func stopTextWatch()    // 拆表
+private static func pollVisibleTextsOnce()
+```
+
+行为：
+- **1 秒一拍**，`Timer` 加在 `RunLoop.main`（`.common` 模式，滚动时也跑）；
+- **首拍**打一份完整快照（`---- first snapshot (N) ----`），并把它记进 `seenTextLines`；
+- 之后**只报增量里带 `[DATE]` 的行**（`★ NEW DATES (n) ★`），其余增量静默 —— 不刷屏；
+- 只读、只打日志，不改视图、不注册手势。
+
+**起停点改到"页面级事件"**（`CustomLyrics+AllTracksLyrics.x.swift` 的 `NPVScrollViewControllerHook`）：
+
+```swift
+func viewWillAppear   { …  InlineLyricsHostLocator.scheduleLookup(…)
+                            WordByWordPlaybackControl.startTextWatch() }   // 新增
+func viewWillDisappear{ …  InlineLyricsHostLocator.stopLookup()
+                            WordByWordPlaybackControl.stopTextWatch() }    // 新增
+```
+
+**为什么必须放这里**：坏卡那批曲目**没有逐词数据**，我们的歌词层一次都不挂
+（`usable == false` 直接交还原生）⇒ 把起表点挂在 `attach()` 里等于**永远不起表**。
+"进入正在播放页"是页面级事件，不依赖任何歌词数据，正是卡出现的时机。
+
+`attach()` 里那两个 `dumpVisibleTexts()` 保留（成本极低，留个底），但**不再起表** —— 单一来源。
+
+### 43.4 下一轮怎么读日志
+
+装新版 → 进正在播放页（KSLV 那批）→ 停留十几秒 → 找：
+
+```
+[ShellText] ---- first snapshot (N) ----      ← 进页面第一秒的底
+[ShellText] ★ NEW DATES (k) ★                 ← 卡冒出来的那一刻
+[ShellText] [DATE] <视图类名> text="2021年12月3日" frame=(…)
+```
+
+拿到真实字符串后反查视图类 / 数据源。**同时**看 `[NPVModule]` 三行确认这次是不是坏卡时刻。
+
+---
+
+## 44. ⚠️ 定性：日志 12 **不是 A/B 成功，而是 A/B 根本没跑** —— flag 假说**被证伪**（2026-09-26）
+
+用户告知：日志 12 就是**关掉「强制歌词入口开关」之后**跑出来的结果。
+
+### 44.1 flag 那套代码在日志 12 里**一次都没执行**
+
+| 证据 | 日志 11（flag 钉着） | 日志 12（flag 关了） |
+|---|---|---|
+| `[Flags]` 行数 | **大量**（12:15:37 起逐条打印歌词 flag） | **0** |
+| `lyrics_entry_point_enabled` | **2 条命中**：`bool=false` + `replacement … 1 match(es)` | **0 条** |
+| `bootstrap/v1/bootstrap` | 有（12:15:36，73199B body） | **0 条命中** |
+| `user-customization-service/v1/customize` | 有 | 有，但 **`status=304 len=0`**（未修改、无 body） |
+
+日志 12 里 customize 是 **304**（`If-None-Match` 命中，服务端说"没变"），
+`[HCUS] Missing buffered body for …/customize (taskId=2)` ——
+**没有 body ⇒ flag 遍历那一整段根本没被调用**。
+
+所以"关掉开关"这个动作，在日志 12 里**没有任何可观测的效果** ——
+它连"要不要跳过这条 flag"的判断点都没走到。这不是 A/B 的对照组，这是**空跑**。
+
+### 44.2 但真正重要的结论在这里：坏卡**照样出现**
+
+日志 12 的坏卡时刻（`Dissonance`，12:30:53–12:30:54）**旁路三连一条不少**：
+
+```
+12:30:53  503  EventCardInfoService/EventCardInfo
+12:30:54  404  cultural-moments-entrypoints/v1/entrypoint
+12:30:54  404  merch-npv-service/v1/merch/track/6KI6BuwR…
+```
+
+⇒ **`lyrics_entry_point_enabled` 与本 bug 无关。** `§39` / `§40` 里"首要嫌疑 = 这条 flag"
+的推断**撤回**。
+
+理由更根本：那条 flag 是**服务端 flag 清单里的一个布尔值**，
+它只能决定"客户端要不要去请求入口" —— 而日志 12 证明**即使我们完全不碰 flag，
+客户端照样去发了那三个请求**。⇒ 发起旁路的门控**不在**这条 flag 上。
+
+### 44.3 假说的正确形态应该是什么
+
+坏卡的链条（三次复现）是：
+
+```
+scrollsita manifest 无 12（也没有 5）
+    → 客户端主动请求三个入口接口
+    → 全部 404/503
+    → 回退本地实体缓存
+    → 渲出带 2021 年发行日期的过期预热卡
+```
+
+关键点是：**"客户端要不要去找卡"这件事，不由 `lyrics_entry_point_enabled` 决定。**
+需要找的是**另一个**开关 —— 候选方向：
+
+1. **`album_presave_second_step_enabled`** / **`top_presaved_prereleases_highlight`**
+   / **`inline_release_date_enabled`** —— 日志 11 的 `[PreRelease]` 命中里这三条
+   与"预发行 / 发行日期 / 预收藏"的字面语义最贴近；
+2. 或者根本**不是 flag** —— 是客户端在"manifest 缺 `12`"时的**本地兜底逻辑**，
+   我们拦不到，只能绕开（例如让 manifest 里**总是**有一个 `12` 或明确的"没有卡"标记）。
+
+### 44.4 下一步（优先级从高到低）
+
+1. **先确认 A/B 真的跑起来了**：关掉开关后，日志里必须有 `[Flags] … SKIPPED`
+   或至少 `lyrics_entry_point_enabled bool=false` 被打印出来。
+   **没有这些行 = 没跑**，结论无效（日志 12 就是这种）。
+   根因八成是 **customize 走了 304 缓存**（`bootstrap` 也整条没出现）——
+   换个网络 / 清 App 缓存 / 冷启动重进，逼它拿一次完整 body。
+2. 若 A/B 真跑起来，坏卡消失 ⇒ 再谈它；**按日志 12 的现有证据，它不会消失。**
+3. 换个方向：在 `[PreRelease]` 那几条 flag 里挑语义最贴近的做同样的开关化 A/B。
+
+
 
 ---
 

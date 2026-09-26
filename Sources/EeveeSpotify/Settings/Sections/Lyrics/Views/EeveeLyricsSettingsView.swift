@@ -42,6 +42,7 @@ struct EeveeLyricsSettingsView: View {
                 syntheticLineTimingSection()
                 injectLyricsCardElementSection()
                 lyricsEntryPointFlagSection()
+                disableNpvPrereleaseProviderSection()
                 // 「隐藏官方歌词」已写死启用（见 `NgzhwmSettingsViewModel` 里那个
                 // getter），不再有开关。
                 romanizationSection()
@@ -185,6 +186,21 @@ struct EeveeLyricsSettingsView: View {
             Toggle(
                 "ngzhwm_lyrics_entry_point_flag".localized,
                 isOn: $viewModel.lyricsEntryPointFlag
+            )
+        }
+    }
+
+    /// 「屏蔽正在播放页的预热卡（整个 provider）」。
+    ///
+    /// 同样**没有 footer**。它是"那张日期过期的『即将发布』卡"的**止血开关**：
+    /// 打开后把解密二进制里逐字找到的那条 scope 钉成 false，
+    /// **正在播放页**这一族预热 provider 不再运行 ⇒ 那张卡必然消失。
+    /// 代价明说：正在播放页的**任何**预热卡都会消失（专辑页 / 关注页不受影响）。
+    @ViewBuilder private func disableNpvPrereleaseProviderSection() -> some View {
+        Section {
+            Toggle(
+                "ngzhwm_disable_npv_prerelease_provider".localized,
+                isOn: $viewModel.disableNpvPrereleaseProvider
             )
         }
     }

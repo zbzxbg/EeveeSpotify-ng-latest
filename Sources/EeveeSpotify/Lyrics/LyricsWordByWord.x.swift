@@ -1975,6 +1975,9 @@ final class WordByWordHost {
             // 十份日志里从没记下过卡上的字，而它不在任何 HTTP 响应里。
             // 放在预览分支是刻意的：卡就出现在这个面（面 A/B 之间那一排模块）。
             if !showsProviderFooter {
+                // 一次性快照：留个"挂载那一刻"的底。
+                // 轮询表不在这里起 —— 它由 `NPVScrollViewControllerHook.viewWillAppear`
+                // 起、`viewWillDisappear` 停（页面级事件），因为坏卡曲目走不到这里。
                 WordByWordPlaybackControl.dumpVisibleTexts()
             }
             // 新层由主时钟驱动，旧 overlay 的回调必须清掉，否则两边同时渲染。
@@ -2029,6 +2032,8 @@ final class WordByWordHost {
             // 拿不到逐词数据 → 走不到上面 AM 分支的那个 dump 点 → 如果只挂在那里，
             // 我们恰恰会在"最想看的那一页"上什么都看不到。
             if !showsProviderFooter {
+                // 一次性快照。轮询表由 `NPVScrollViewControllerHook.viewWillAppear` 起
+                // （页面级事件）—— 坏卡曲目正是走这条路交还原生的，卡随后才出现。
                 WordByWordPlaybackControl.dumpVisibleTexts()
             }
             return false

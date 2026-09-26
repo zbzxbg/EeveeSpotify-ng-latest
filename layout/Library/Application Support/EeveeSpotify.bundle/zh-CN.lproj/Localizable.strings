@@ -129,6 +129,7 @@ word_by_word_lyrics_provider = "逐词歌词提供者：%@";
 ngzhwm_synthetic_line_timing = "补全歌词时间轴";
 ngzhwm_inject_lyrics_card_element = "给没有歌词卡片的歌曲补一张";
 ngzhwm_lyrics_entry_point_flag = "强制歌词入口开关";
+ngzhwm_disable_npv_prerelease_provider = "屏蔽过期的\u201c即将发布\u201d卡";
 ngzhwm_multi_level_fallback = "多级回退";
 ngzhwm_multi_level_fallback_description = "该功能在此版本上体验不佳。多级回退:歌词将按照Mxm-PL-LRC-Gen的方式多级回退查询(Mxm和PL最长等待5秒，LRCLIB和Genius最长等待3秒；如果某个来源在对应时间内仍未返回有效歌词，则查询下一个来源)。";
 ngzhwm_netease_romaji_local = "修改NetEase日语罗马字的展示方式";

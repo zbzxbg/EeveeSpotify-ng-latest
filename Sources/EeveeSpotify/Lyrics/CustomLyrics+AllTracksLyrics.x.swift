@@ -348,6 +348,19 @@ class NPVScrollViewControllerHook: ClassHook<NSObject> {
 
         // 9.1.x 上内嵌歌词宿主已改名，改为运行时查找（不新增 hook，避免注册期崩溃）。
         InlineLyricsHostLocator.scheduleLookup(from: target as? UIViewController)
+
+        // 预热卡文字轮询：**进页面就起**。
+        //
+        // 为什么放在这里而不是"挂载歌词层的时候"：坏卡那批曲目根本没有逐词数据，
+        // 我们的层一次都不挂（`usable == false` 直接交还原生），挂在挂载点等于永远不起表。
+        // 这是"进入正在播放页"这个**页面级事件**，正是卡出现的时机。
+        WordByWordPlaybackControl.startTextWatch()
+
+        // 「正在播放页预热卡」视图树扫描（只读，10 秒后自停）：
+        // 解密二进制说那张卡是 `Prerelease.UI.PrereleaseCardNowPlaying`，
+        // 但"这个类能不能 resolve / 能不能 hook"只能真机确认 ——
+        // 这条**不依赖 hook 成功**：卡若在场，视图树里必然留下痕迹。
+        PrereleaseCardProbe.startCardSweep(from: (target as? UIViewController)?.view)
     }
     
     func viewWillDisappear(_ animated: Bool) {
@@ -355,6 +368,10 @@ class NPVScrollViewControllerHook: ClassHook<NSObject> {
         orig.viewWillDisappear(animated)
         // 页面要走了：停掉内嵌宿主看门狗（否则它会对着一个已经离开屏幕的页面一直查）。
         InlineLyricsHostLocator.stopLookup()
+        // 页面要走了：文字轮询也停掉（它每秒扫一遍窗口，留着纯属浪费）。
+        WordByWordPlaybackControl.stopTextWatch()
+        // 页面级的卡扫描一起停（它本来也会 10 秒自停，这里只是提前收工）。
+        PrereleaseCardProbe.stopCardSweep()
     }
 }
 

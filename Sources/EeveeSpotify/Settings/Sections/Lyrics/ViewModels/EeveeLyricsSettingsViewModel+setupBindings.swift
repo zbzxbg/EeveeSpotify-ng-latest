@@ -121,6 +121,9 @@ extension EeveeLyricsSettingsViewModel {
         logBooleanSetting($syntheticLineTiming, "synthetic line timing")
         logBooleanSetting($injectLyricsCardElement, "inject lyrics card element")
         logBooleanSetting($lyricsEntryPointFlag, "lyrics entry point flag")
+        // 「屏蔽正在播放页预热卡」：这条是 A/B 的关键分组标记 —— 日志里必须能看出
+        // 这一场到底有没有把 NPV 那一族预热 provider 钉掉。
+        logBooleanSetting($disableNpvPrereleaseProvider, "disable NPV prerelease provider")
         logBooleanSetting($disableLyricsFeature, "disable lyrics feature")
         logBooleanSetting($removeMxmInterludeSymbol, "remove interlude symbol")
         logBooleanSetting($neteaseRomajiLocal, "NetEase romaji display mode")

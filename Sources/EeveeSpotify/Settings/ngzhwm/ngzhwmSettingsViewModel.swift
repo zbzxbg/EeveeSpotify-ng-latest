@@ -28,6 +28,12 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// （关掉它之后那张过期的「即将发布」卡**依然出现**），于是剩下的、唯一还能影响
     /// 正在播放页卡片渲染的我们自家改动就是这条 flag。留开关就是为了判定它。
     static let lyricsEntryPointFlagKey = "ngzhwm_lyricsEntryPointFlag"
+    /// 「屏蔽正在播放页的预热卡」—— 见 `isNowPlayingPrereleaseProviderDisabled`。
+    ///
+    /// 2026-09-26 新增：解密二进制把"假卡"钉成了
+    /// `Prerelease.UI.PrereleaseCardNowPlaying` + 正在播放页专用的 prerel provider，
+    /// 于是终于有一个"既碰得到、又在正确的层"的落点。默认 OFF（不改既有行为）。
+    static let nowPlayingPrereleaseProviderKey = "ngzhwm_disableNpvPrereleaseProvider"
     // 已移除一个 key（2026-09-25）：`ngzhwm_hideOfficialLyrics` ——
     // 它对应的行为已在下面**写死启用**，不再读 UserDefaults。
     // 旧设备上残留的键不再被读、也不会被清（留着无害）。
@@ -147,5 +153,30 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// prerelease 记录渲出来的。
     static var isLyricsEntryPointFlagForced: Bool {
         bool(forKey: lyricsEntryPointFlagKey, defaultValue: true)
+    }
+
+    /// 「屏蔽正在播放页的预热卡（整个 provider）」—— 见 `isNowPlayingPrereleaseProviderDisabled`。
+    ///
+    /// 默认 **OFF**（保持既有行为：该出现的预热卡照常出现）。打开后我们把服务端那条
+    /// `ios-prerelease-nowplayingviewprovider-impl.is_enabled` 钉成 **false**，
+    /// 于是**正在播放页**这一族预热 provider 不再运行。
+    ///
+    /// 为什么是这条（2026-09-26，解密二进制取证 `LYRICS_MODULE_NEXT_STEPS.md` §45）：
+    /// 那张"日期早已过期"的假卡是 `Prerelease.UI.PrereleaseCardNowPlaying`，它的数据来自
+    /// **正在播放页专用**的 `PrereleaseNowPlayingScrollDataProvider`
+    /// （`com.spotify.service.prerelease.nowplayingviewprovider`）。此前所有失败的路都是
+    /// 在错误的一层动手：
+    ///
+    ///   · 剥元素 `12` —— 假卡恰恰出现在**没有 `12`** 的曲目上，只杀正版、杀不掉坏的；
+    ///   · 那条歌词 flag —— 布尔量变不出"2021年5月27日"这种数据，且那次 A/B 是空跑
+    ///     （customize 走 304 无 body，代码整段没执行）；
+    ///   · 网络层 —— 十份日志里日期一次都没在网络上出现过；
+    ///   · 渲染层 —— 坏卡曲目上我们的歌词层**根本不挂载**（无逐词数据），抓不到出场窗口。
+    ///
+    /// ⇒ 唯一同时满足"能碰到"且"就在正确的层"的落点，就是这个 provider。
+    /// 代价明说：**正在播放页的任何预热卡都会消失**；专辑页 / 关注页 / 搜索页那些
+    /// prerel 表面不受影响（它们的 provider 不在这个 scope 下）。
+    static var isNowPlayingPrereleaseProviderDisabled: Bool {
+        bool(forKey: nowPlayingPrereleaseProviderKey, defaultValue: false)
     }
 }

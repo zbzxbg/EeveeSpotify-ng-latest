@@ -80,6 +80,24 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
 
+    /// 「屏蔽正在播放页的预热卡（整个 provider）」。
+    ///
+    /// ⚠️ 初值必须走默认值 getter（默认**关**：不动既有行为）。
+    ///
+    /// 为什么它排在 `lyricsEntryPointFlag` **后面**：前一个开关那次 A/B 是**空跑**
+    /// （customize 走 304 无 body，flag 那段代码整段没执行），所以"那条 flag 与本
+    /// bug 无关"的结论从未被真正验证过；而这一个开关打在**解密二进制里逐字找到的**
+    /// scope 上（`ios-prerelease-nowplayingviewprovider-impl.is_enabled`），
+    /// 且它管的是正在播放页**专用**的那一族 provider。
+    @Published var disableNpvPrereleaseProvider = NgzhwmSettingsViewModel.isNowPlayingPrereleaseProviderDisabled {
+        didSet {
+            UserDefaults.standard.set(
+                disableNpvPrereleaseProvider,
+                forKey: NgzhwmSettingsViewModel.nowPlayingPrereleaseProviderKey
+            )
+        }
+    }
+
     // 已移除一个开关（2026-09-25）：`hideOfficialLyrics` —— 它对应的行为已经在
     // `NgzhwmSettingsViewModel` 里**写死启用**（见那个 getter 的说明），
     // 设置页不再暴露、也不再写 UserDefaults。
@@ -160,6 +178,7 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
             syntheticLineTiming,
             injectLyricsCardElement,
             lyricsEntryPointFlag,
+            disableNpvPrereleaseProvider,
             // ⚠️ `amllPreferred`（已删功能）与 `hideOfficialLyrics`（已写死启用）
             // 都不能再列在这里 —— 属性本身没了，列着就是编译错误。
             disableLyricsFeature,
