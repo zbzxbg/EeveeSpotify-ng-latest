@@ -40,8 +40,9 @@ struct EeveeLyricsSettingsView: View {
                 
                 hideOnErrorSection()
                 syntheticLineTimingSection()
-                // 「隐藏官方歌词」「补卡片元素」两项已写死启用（见
-                // `NgzhwmSettingsViewModel` 里那两个 getter），不再有开关。
+                injectLyricsCardElementSection()
+                // 「隐藏官方歌词」已写死启用（见 `NgzhwmSettingsViewModel` 里那个
+                // getter），不再有开关。
                 romanizationSection()
                 
                 // 多级回退链路包含 Musixmatch，其语言项同样可配置。
@@ -160,10 +161,24 @@ struct EeveeLyricsSettingsView: View {
         }
     }
 
-    // 已移除两个 Section（2026-09-25）：`hideOfficialLyricsSection()` /
-    // `injectLyricsCardElementSection()` —— 它们的开关价值只在"验证修复有没有用"那一步，
-    // 验证完就写死启用了。那两个 l10n 键也一并删除（见 en/zh-CN 的 Localizable.strings）。
-    // 同批删掉的 `syntheticLineTimingSection()` 已于 2026-09-26 恢复，见上面那个方法。
+    /// 「给没有歌词卡片的曲目补一个卡片元素」。
+    ///
+    /// 同样**没有 footer**。它的用途是判定"404 曲目上那张「即将发布/预收藏」卡
+    /// 是不是这个元素渲出来的"：关掉 → 那张卡消失而歌词卡还在 = 确实是它。
+    @ViewBuilder private func injectLyricsCardElementSection() -> some View {
+        Section {
+            Toggle(
+                "ngzhwm_inject_lyrics_card_element".localized,
+                isOn: $viewModel.injectLyricsCardElement
+            )
+        }
+    }
+
+    // 已移除一个 Section（2026-09-25）：`hideOfficialLyricsSection()` ——
+    // 它的开关价值只在"验证修复有没有用"那一步，验证完就写死启用了。
+    // 那个 l10n 键也一并删除（见 en/zh-CN 的 Localizable.strings）。
+    // 同批删掉的 `syntheticLineTimingSection()` 与 `injectLyricsCardElementSection()`
+    // 均已恢复，见上面两个方法。
 
     @ViewBuilder private func neteaseRomajiLocalSection() -> some View {
         Section(

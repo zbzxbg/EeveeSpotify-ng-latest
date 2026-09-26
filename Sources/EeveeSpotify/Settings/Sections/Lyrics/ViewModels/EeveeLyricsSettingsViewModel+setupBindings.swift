@@ -114,10 +114,12 @@ extension EeveeLyricsSettingsViewModel {
         logBooleanSetting($wordByWordLyrics, "word-by-word lyrics")
         logBooleanSetting($betterWordByWordLyrics, "better word-by-word lyrics")
         // 已移除：`$amllPreferred`（「AMLL 优先」整条链已删除）。
-        // 「隐藏官方歌词」「补卡片元素」两项已写死启用（见 NgzhwmSettingsViewModel），
-        // 设置页不再有开关，因此这里也没有可记录的绑定。
-        // 这一条是 A/B 的分组标记：日志里能直接看出"这一场到底补没补时间轴"。
+        // 「隐藏官方歌词」已写死启用（见 NgzhwmSettingsViewModel），设置页不再有开关，
+        // 因此这里也没有可记录的绑定。
+        // 下面这两条都是 A/B 的分组标记：日志里能直接看出"这一场到底补没补时间轴、
+        // 有没有往 scroll 元素列表里补卡片元素"。
         logBooleanSetting($syntheticLineTiming, "synthetic line timing")
+        logBooleanSetting($injectLyricsCardElement, "inject lyrics card element")
         logBooleanSetting($disableLyricsFeature, "disable lyrics feature")
         logBooleanSetting($removeMxmInterludeSymbol, "remove interlude symbol")
         logBooleanSetting($neteaseRomajiLocal, "NetEase romaji display mode")

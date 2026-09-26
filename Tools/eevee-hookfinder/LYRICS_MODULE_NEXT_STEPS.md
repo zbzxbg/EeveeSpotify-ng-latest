@@ -497,6 +497,119 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 34. 「补卡片元素」也改回真开关；日志 3 解出的元素清单（2026-09-26）
+
+**材料**：`C:\dsh\readlog\eeveespotify_debug 3.log`（9/26 02:13，Spotify 9.1.86 / iOS 27）、
+`C:\dsh\else\5.jpg`（「即将发布 / 已预收藏」卡的照片）、日志 2、日志 28。
+
+### 34.1 起因：404 曲目上会出现一张「即将发布 / 已预收藏」卡
+
+用户报告：预览卡片那块，**部分歌曲**会多出一张「即将发布」卡（照片 5.jpg：`Notes of Color`、
+`发布时间：2026年5月30日`、`已预收藏`）。日期早已过期，甚至见过 2021 年的，
+而且"没听说过这歌有预热"。这张卡**和歌词卡同时存在**，并且**一会有一会没有**。
+
+### 34.2 日志 3 解出的元素清单（本轮最硬的证据）
+
+把每条 `scrollsita/v1/scroll/spotify:track:<id>` 响应的元素列表按 wire format 拆开
+（元素类型 = 每个条目的**第一个字段号**）：
+
+| 曲目 | color-lyrics | 服务端**原生**元素 | 我们注入 |
+|---|---|---|---|
+| Floria - HIBANA | **200** | **5**, 2, 3, 4 | — |
+| Notes of Color - Yono（照片那首） | **200** | **5**, 2, 3, 4 | — |
+| 天気雨 - 茉ひる | **200** | **11**(concert)、**5**、2, 3, 4 | — |
+| Dog Eats Dog - KSLV Noh | **404** | 2, 3, 4 | **5** ← 我们加的 |
+| Don't Hesitate - KSLV Noh | **404** | 2, 3, 4 | **5** ← 我们加的 |
+
+（`2`=关于艺人、`3`=探索、`4`=canvas、`5`=§7.3 猜的那个、`11`=演出/concert 卡。
+原生 `5` 的字节结构 = `{字段5{曲目URI}, 字段23{section URI = …Gq21}}`，
+与我们合成的那一份**逐字节同形** —— 所以"我们少写了字段"这条假设不成立。）
+
+"`5` ⟺ status 200" 在这份日志里是 **5/5**，比 §7.3 的 3 个样本更硬。
+
+### 34.3 由此得到的两个互斥读法（**尚未判定**）
+
+- **读法 A**：`5` 不是歌词卡，而是一张"内容卡/预热卡"槽位。那么 §7.3/§10 的结论
+  （`5` = 歌词卡、补上它就能造出歌词卡）是**误判**，§10 那次"补上就有卡了"只是相关性
+  （真正建歌词卡的是"歌词数据到达"，见 `CustomLyrics.x.swift:560-564` 的注释）；
+  代价是**我们给每一首 404 的歌都补了一张内容不受我们控制的卡** ——
+  卡里的东西（哪一条预热、什么日期）由服务端那份 section 内容决定，我们管不着。
+- **读法 B**：`5` 确实是歌词卡，预热卡来自另一条路（另一个接口/section 内容由服务端决定）。
+  硬伤是：Don't Hesitate 那份响应里**原生只有 2/3/4**，多出来的只有我们加的 `5`。
+
+**为什么"A"看起来更像**：用户观察到那张卡**一会有一会没有**。而我们的注入有个硬前提 ——
+**只有走网络的响应我们才改得到**；客户端从自己的缓存/预取里拿 scroll 时，我们连响应都看不见
+（日志 2 的 `6O4oKV` 就是这个形状：01:40:33 / 01:40:41 两次 `NPV scroll` 建立，
+**没有对应的 scrollsita 网络请求**，直到 01:40:52 才第一次走网络并被注入）。
+"时有时无"和"有没有走网络"是同一个节奏。
+
+**已有的两条相关观察**（见 34.4 的待验证项）：
+- 打开「禁用歌词功能」→ 那张预热卡消失。⚠️ 这个开关**同时**改两件事（摘掉 `5` 元素 + 换 payload），
+  所以它**不能**单独作为"预热卡 = 元素 5"的证据；
+- 用户口径：这张卡**和歌词卡同时存在**；而"禁用歌词功能"能把**歌词卡**藏住 ——
+  这反过来说明**歌词卡确实需要那个元素**（否则它应该退化成"未找到歌词"而不是消失），
+  这一点对读法 A 不利。
+
+### 34.4 本轮改动：把「补卡片元素」恢复为真开关（默认 ON）
+
+`isLyricsCardElementInjectionEnabled` 此前写死 `true`（§23），用户无法做 A/B。现在：
+
+| 文件 | 改动 |
+|---|---|
+| `Settings/ngzhwm/ngzhwmSettingsViewModel.swift` | 恢复 `injectLyricsCardElementKey`；getter 改为 `bool(forKey:defaultValue: true)` |
+| `…/Lyrics/ViewModels/EeveeLyricsSettingsViewModel.swift` | 恢复 `@Published injectLyricsCardElement`（初值走默认值 getter）+ 加进 `animationValues` |
+| `…/Lyrics/Views/EeveeLyricsSettingsView.swift` | 恢复 `injectLyricsCardElementSection()`，在 `syntheticLineTimingSection()` 之后；**无 footer** |
+| `…/ViewModels/…+setupBindings.swift` | 恢复 `[Settings] inject lyrics card element -> ON/OFF` |
+| `en` / `zh-CN` | `ngzhwm_inject_lyrics_card_element` |
+| `Premium/Helpers/SpotifyResponsePatcher.swift` | 只改注释：说明 `shouldModify` 里 `BrowsitaSectionStripper.shouldHandle` **已经覆盖 `/scrollsita/`**，所以关掉开关**不会**影响去广告那一步（旧注释写的是"关着连缓冲都不做"，是错的） |
+
+**判决性实验（用户跑，四种结果的含义）**：
+
+| 关掉注入后 | 预热卡 | 歌词卡 | 结论 |
+|---|---|---|---|
+| 场景 1 | 没了 | 还在 | 读法 A 成立 → 注入纯粹在造垃圾卡 → **整个去掉** |
+| 场景 2 | 没了 | 也没了 | `5` 是歌词卡的必要条件 → 读法 B，问题变成"同一份元素为什么有时渲成预热卡" |
+| 场景 3 | 还在 | 还在 | 预热卡与我们完全无关，去查别的接口 |
+| 场景 4 | 还在 | 没了 | 说明预热卡另有来源、而我们那个元素确实是歌词卡 |
+
+⚠️ 用户当前设置：`synthetic line timing: OFF`。**做这个 A/B 时不要同时改时间轴开关**，
+否则两个变量一起动。
+
+### 34.5 另一件事：「禁用歌词功能」藏不住封面下那行单行歌词（面 A）
+
+用户口径：**预览歌词卡拦得住**（进全屏不行、卡片消失），但**封面与歌手名之间那行单行歌词**
+拦不住；且那行**没有"歌词提供者"可看**（那是全屏页底部的东西）。测试曲目是日语歌，
+内容看起来是 **Spotify 自己的日区供应商 プチリリ**。
+
+两种可能，**靠日志一句话分开**：
+
+1. 那一刻**没有** `color-lyrics` 请求 → 客户端从**它自己的歌词仓库**渲染
+   （`Lyrics_OfflineImpl` / `is_lyrics_cache_v2_enabled=true`；§32 已记过这条路径）。
+   没有响应可替换 ⇒ **HTTP 层天生拦不住**，只能改设置说明或去动原生显示层（风险高）。
+2. 有请求、也替换成占位了，但单行仍显示真歌词 ⇒ 才是真 bug，说明喂给面 A 的不是这条响应。
+
+**另一个立刻能分辨的观察**：那一刻单行显示的是**真歌词**，还是**"未找到歌词"**四个字？
+- "未找到歌词" ⇒ 我们拦住了，只是"藏住"没做到 —— 禁用时交的是**一行占位**而不是**空 payload**
+  （`SpotifyResponsePatcher.disabledLyricsPayload`）。改成 0 行即可，改动很小；
+- 真歌词 ⇒ 落到上面第 1 或第 2 种，按日志分。
+
+### 34.6 ⚠️ 未验证 / 未做完
+
+- **没有编译验证**：本机没有 Swift 工具链，且本轮 pwsh 执行器又挂了
+  （`0xC0000142`，`python Tools/l10n_lint.py` / `git diff` 一律这个码），
+  连 l10n linter 都没能跑。改动是**人工逐处复核**的：四处是"新增属性 / 新增调用 + 一个恢复的
+  Section"，唯一的行为改动就是那个 getter 从常量变成读 UserDefaults（默认值不变，行为不变）。
+- **l10n 只加了 `en` / `zh-CN`**：另外 25 个 locale 现在缺**两个**键
+  （`ngzhwm_synthetic_line_timing`、`ngzhwm_inject_lyrics_card_element`）。
+  运行期**不会露出 key 名** —— `BundleHelper.localizedString` 在本 locale 查不到时显式回落到
+  `enBundle`（`BundleHelper.swift:52-62`）；但 `Tools/l10n_lint.py` 会报 MISSING。
+  补法（等 shell 恢复）：把 en 那两行照抄进各 locale 末尾的 `/* AUTO-FILLED (untranslated) */` 块。
+- **预热卡到底是谁造的仍未定**：等用户按 34.4 的表跑一次 A/B，以及"预热卡出现/消失各记
+  2–3 次本地时间"（日志是 UTC，差 9 小时）后，用 `[Scrollsita] injected lyrics-card element`
+  那行去对。**在结论出来之前不要动 `ScrollsitaLyricsElementInjector` 本身。**
+
+---
+
 ## 33. 「补时间轴」改回真开关 + 多级回退的署名（2026-09-26）
 
 **材料**：`C:\dsh\readlog\eeveespotify_debug.log`（9/26 00:39–00:42，Spotify 9.1.86 / iOS 27，下文简称日志 29）

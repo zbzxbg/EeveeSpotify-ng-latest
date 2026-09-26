@@ -16,9 +16,15 @@ class NgzhwmSettingsViewModel: ObservableObject {
     /// "不补时间轴时这份 payload 还能不能正常展示"。沿用旧 key 名，
     /// 设备上残留的值会被重新读起来。
     static let syntheticLineTimingKey = "ngzhwm_syntheticLineTiming"
-    // 已移除两个 key（2026-09-25）：`ngzhwm_hideOfficialLyrics` /
-    // `ngzhwm_injectLyricsCardElement` —— 它们对应的行为已在下面**写死启用**，
-    // 不再读 UserDefaults。旧设备上残留的键不再被读、也不会被清（留着无害）。
+    /// 「给没有歌词卡片的曲目补一个卡片元素」—— 见 `isLyricsCardElementInjectionEnabled`。
+    ///
+    /// ⚠️ 2026-09-26 **恢复为真开关**（曾一度写死启用）：2026-09-26 的真机日志（日志 3）
+    /// 显示这个元素在部分曲目上渲染成了「即将发布 / 已预收藏」卡，需要 A/B 才能定性。
+    /// 沿用旧 key 名，设备上残留的值会被重新读起来。
+    static let injectLyricsCardElementKey = "ngzhwm_injectLyricsCardElement"
+    // 已移除一个 key（2026-09-25）：`ngzhwm_hideOfficialLyrics` ——
+    // 它对应的行为已在下面**写死启用**，不再读 UserDefaults。
+    // 旧设备上残留的键不再被读、也不会被清（留着无害）。
     static let blurredLyricsBackdropKey = "ngzhwm_blurredLyricsBackdrop"
     static let lyricsBackdropMaterialKey = "ngzhwm_lyricsBackdropMaterial"
 
@@ -101,16 +107,21 @@ class NgzhwmSettingsViewModel: ObservableObject {
         bool(forKey: syntheticLineTimingKey, defaultValue: true)
     }
 
-    /// 「给没有歌词卡片的曲目补一个卡片元素」。`Bool` 语义：**恒为启用**。
+    /// 「给没有歌词卡片的曲目补一个卡片元素」。
     ///
     /// 背景：真机取证发现 `scrollsita/v1/scroll/spotify:track:<id>`（正在播放页的**元素列表**）
     /// 只在"Spotify 自己有官方歌词"的曲目上多下发一个元素（内层字段号 5，只引用曲目 URI）。
-    /// 三首样本 100% 吻合，而唯一一次肉眼看到歌词卡片正是那首有多下发元素的曲目。
-    ///
     /// 补上之后，缺这一项的响应会被写入这一项（byte 级，只在能完整解析时动手，
     /// 任何异常都原样放行）。见 `ScrollsitaLyricsElementInjector`。
     ///
-    /// ⚠️ **写死为 true**（2026-09-25）：假设已在真机验证（补上后卡片出现、内容来自我们注入的
-    /// payload），因此不再是实验开关 —— 否则"某些歌没有歌词卡片"会随这个开关的默认值回归。
-    static var isLyricsCardElementInjectionEnabled: Bool { true }
+    /// ⚠️ 2026-09-26 **恢复为真开关**（此前一度写死 `true`）。默认 **ON** ——
+    /// 保持"404 曲目也有歌词卡片"的既有行为不变。
+    ///
+    /// 为什么要留开关：日志 3 解出的元素清单显示，在 404 曲目上我们补的这一个元素
+    /// 是那份响应里**唯一**多出来的东西，而用户报告这些曲目上会间歇出现一张
+    /// 「即将发布 / 已预收藏」卡（日期早已过期，甚至有 2021 年的）。
+    /// 关掉它即可判定：那张卡到底是这个元素渲出来的，还是另一条路来的。
+    static var isLyricsCardElementInjectionEnabled: Bool {
+        bool(forKey: injectLyricsCardElementKey, defaultValue: true)
+    }
 }

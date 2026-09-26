@@ -53,9 +53,21 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
 
-    // 已移除两个开关（2026-09-25）：`hideOfficialLyrics` / `injectLyricsCardElement` ——
-    // 它们对应的行为已经在 `NgzhwmSettingsViewModel` 里**写死启用**（见那两个 getter
-    // 的说明），设置页不再暴露、也不再写 UserDefaults。
+    /// 「给没有歌词卡片的曲目补一个卡片元素」。
+    ///
+    /// ⚠️ 初值同样必须走默认值 getter（默认开），不能用 `UserDefaults.bool(forKey:)`。
+    @Published var injectLyricsCardElement = NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled {
+        didSet {
+            UserDefaults.standard.set(
+                injectLyricsCardElement,
+                forKey: NgzhwmSettingsViewModel.injectLyricsCardElementKey
+            )
+        }
+    }
+
+    // 已移除一个开关（2026-09-25）：`hideOfficialLyrics` —— 它对应的行为已经在
+    // `NgzhwmSettingsViewModel` 里**写死启用**（见那个 getter 的说明），
+    // 设置页不再暴露、也不再写 UserDefaults。
     
     // 注：背景相关（模糊封面 / 系统材质）**没有** Published 属性 ——
     // 它们不是用户可选项，而是跟随「更好的逐词歌词」自动启用。
@@ -131,9 +143,9 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
             betterWordByWordLyrics,
             wordByWordLyrics,
             syntheticLineTiming,
-            // ⚠️ `amllPreferred`（已删功能）与 `hideOfficialLyrics` /
-            // `injectLyricsCardElement`（已写死启用）都不能再列在这里 ——
-            // 属性本身没了，列着就是编译错误。
+            injectLyricsCardElement,
+            // ⚠️ `amllPreferred`（已删功能）与 `hideOfficialLyrics`（已写死启用）
+            // 都不能再列在这里 —— 属性本身没了，列着就是编译错误。
             disableLyricsFeature,
             removeMxmInterludeSymbol,
             neteaseRomajiLocal,
