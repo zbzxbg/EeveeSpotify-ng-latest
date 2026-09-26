@@ -497,6 +497,99 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 38. 预热卡：78 条 manifest 全解 + 关键字零命中 ⇒ 数据不在我们能看到的网络里，加「全量请求清单 + 日期串」探针（2026-09-26，日志 8 + 照片 8/9）
+
+**材料**：`C:\dsh\readlog\eeveespotify_debug 8.log`（537KB，06:22:52–06:33:14 UTC = 本地 15:22–15:33）、
+`C:\dsh\else\8.jpg`（Dog Eats Dog，14:07）、`C:\dsh\else\9.jpg`（Final Stage，15:32）。
+
+### 38.1 三件事被这份日志**排除**（都是硬证据，不是推断）
+
+**（1）假卡不在 scrollsita 的元素列表里。** 整场 **79 条** `[Scrollsita] manifest` 全部解出，
+逐条统计后只有两种形状：`2/3/4`（无词曲目）与 `5/2/3/4`（有词曲目，外加少量 `11` 演出 / `6` / `23`）：
+
+```
+2enGySbM3Bd38rNywkdkLe (Final Stage)     body=333B has5=false elements=[2,3,4]
+2XMcZj3aVmbo1gjUFqQe5e (Dog Eats Dog)    body=373B has5=false elements=[2,3,4]
+```
+
+**两条假卡所在的曲目，元素列表里连 `12` 都没有**；整场 `12` 只出现过一次（`6k2NwBLWvFhoNg8etP9EMo`
+MONTAGEM KOKORO，即 §36 那张**正版**卡）。⇒ 「服务端下发了一个预热元素」这条彻底没了。
+
+**（2）也不在三个旁路模块里。** `cultural-moments` / `merch-npv` 恒为 404
+（`No entrypoint is defined…` / `No artists with merch…`）；`EventCardInfoService` 只在**真有演唱会**
+的曲目上 200，体里是 `spotify:concert:` + 场馆 + `2027-01-23T16:30:00+0900` 这种**明文日期**，
+没有任何一条提到预热 / 预发行。
+
+**（3）明文关键字层面，整个会话零命中。** `[PreRelease]` 探针（11 个关键字，扫所有响应体）
+全库只有 4 处命中，**全在 `bootstrap` / `customize` 的 flag 名字里**
+（`ios-prerelease-feature`、`album_presave_second_step_enabled`、`inline_release_date_enabled`、
+`ios-upcoming-releaseshubpage-impl`），加上一条 `browsita` 的 `spotify:upcoming-releases` 页面 URI。
+⇒ **没有一次业务响应带着"这张专辑要发布 / 已预收藏"的数据。**
+
+### 38.2 「第一次有、重进没有」的差别 = **旁路请求**
+
+同一首 `Fade Away`（`3o0CIpmWd0oLY5I7vvNXuI`）两次加载，manifest **逐字节同形**（373B，`2/3/4`），
+差别只在旁路：
+
+| 时刻 | 旁路请求 | 卡 |
+|---|---|---|
+| 06:23:59 第一次进页面 | `EventCardInfo + cultural-moments + merch` + scrollsita | **在场** |
+| 06:29:48 退出重进 | **只有** scrollsita | 没了 |
+
+`watch-feed/v1/discovery-from-seed` 两次都发（每首歌必发一次），所以**不是它**。
+
+而照片 8/9 两张假卡的日期是**绝对日期**（`发布时间：2021年5月27日` / `2023年8月10日`），
+正版卡（§36 照片 7）是**相对文案**（`在 6 天内发布`）—— 两种渲染说明假卡拿到的是一份
+**带日期的数据**；只是那份数据以 protobuf 字段到达，明文关键字扫不到。
+
+⇒ 剩下两条互斥读法，现有材料**分不开**：
+
+- **读法 A**：数据搭那三个旁路接口之一过来（最像 `EventCardInfoService` —— 它是这一场唯一
+  返回 200 且有内容的）；
+- **读法 B**：数据在**客户端本地**（实体缓存 / 某条我们看不见的路径），第一场用的是陈旧记录，
+  重建页面时被刷新掉。
+
+### 38.3 本轮改动：`[Traffic]` 两支探针（全量请求清单 + ISO 日期串）
+
+| 内容 | 说明 |
+|---|---|
+| `probeTrafficHeaders(url:response:)` | **每一条**响应一行：`resp #N status= type= len= host= path=`。这是"某条请求到底发生过没有"的唯一直接判据 —— 上一节的对照是人工从 `TokenCapture` 里翻出来的，现在直接可读 |
+| `probeTrafficBody(url:taskID:data:)` | ① 该 task 首块体积（响应头常常没有 `Content-Length`）；② 全字节扫 `NNNN-NN-NN` 形状的日期串，命中打 `date= path= ctx=`（前后各 60 字节）；③ `discovery-from-seed` / `EventCardInfoService` / `scrollsita` 三条路径 dump 前 2048 字节 hex |
+| 补的盲点 | `[PreRelease]` 探针超过 256KB 会**完全静默** —— 现在把"跳过的大响应"也记一行（最多 8 条），免得再出现"没命中"与"没扫"分不清 |
+
+为什么盯**日期串**：`EventCardInfoService` 的日期是明文的，所以假卡那份数据**如果**来自网络，
+它的日期大概率也是明文 —— 扫到就能直接指认是哪条响应在供数据（读法 A 成立）；整场一条都扫不到，
+读法 B 就成立，方向换成"本地那面旗子"。
+
+改动点：`SpotifyResponsePatcher.swift` 新增两支探针（`_traffic*` 全是 file-private 状态，
+`printableContext` 多一个 `radius: Int = 80` 默认参数，既有调用行为不变）；
+`HttpClientURLSessionHooks.x.swift` / `DataLoaderServiceHooks.x.swift` 的
+`didReceiveResponse` + `didReceiveData` 各加一处调用（两条 HTTP 栈都要，漏一条就是盲点）。
+**只读、只打日志、不参与 `shouldModify`、不改任何字节。**
+
+### 38.4 复现协议（拿到日志怎么读）
+
+1. 装新构建 → 播一首**会出假卡**的歌（`Dog Eats Dog` / `Final Stage`），**第一次进听歌页就截图**；
+2. 退出听歌页**再进一次**，确认假卡消失；
+3. 导出日志，然后按顺序看：
+   - `[Traffic] resp` 清单里，**"卡在场"那一次有、重进那一次没有**的 path 是哪个 → 那就是嫌疑人；
+   - `[Traffic] date=` 有没有命中**那首歌专辑的发行日**（`2021-05-27` / `2023-08-10`）；
+     命中 → 看 `path=` 与 `ctx=`，读法 A 落地，下一步就是"按日期过滤这条响应"；
+   - 一条 `date=` 都没有 → 读法 B，网络层无解，方向换成找本地那面旗子（或直接做"摘卡"层）。
+
+### 38.5 ⚠️ 未验证
+
+- **没有编译验证**：本机没有 Swift 工具链（`swift` / `theos` / `make` 全不存在），本会话的 shell
+  也只能读（`pwsh` 跑得动，但改文件必须走一次授权）。改动人工逐处复核：新增的两个函数只用到
+  同文件的 `lock` / `writeDebugLog` / `printableContext`，`switch offset { case 4, 7: … }` 走
+  `default` 分支，无 `@unknown default` 需求；`_trafficDumped` 是 `[String: Int]` 计数器
+  （初版写成 `Set` 时 `.filter{}.count` 的语义是错的，已改）。
+- 本轮**没有新增 l10n 键**，没有新增开关，没有改任何数据路径 —— 行为与上一版**逐字节等价**。
+- §37 留下的那条 `should_nova_scroll_use_scrollsita — 0 match(es)` 结论未变：那条 `.remove` 是**空枪**
+  （服务端根本没下发），与预热卡无关。
+
+---
+
 ## 37. 预热卡三条线全部收口：元素/旁路都排除，剩"数据从哪来"—— 加两支探针（2026-09-26，日志 7 + 照片 8）
 
 **材料**：`eeveespotify_debug 7.log`、`C:\dsh\else\8.jpg`。

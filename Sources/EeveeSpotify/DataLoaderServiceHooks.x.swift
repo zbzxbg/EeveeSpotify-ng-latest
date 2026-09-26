@@ -187,6 +187,8 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
             SpotifyResponsePatcher.probeLyricsResponseHeaders(url: probeURL, response: response)
             // 正在播放页的「旁路模块」（预热卡嫌疑来源）：状态 + Content-Type。
             SpotifyResponsePatcher.probeNPVModuleHeaders(url: probeURL, response: response)
+            // 全量请求清单：每一条响应一行（预热卡排查的"某条请求到底发生过没有"）。
+            SpotifyResponsePatcher.probeTrafficHeaders(url: probeURL, response: response)
         }
 
         // Lyrics 4xx/5xx — replace with our custom fetch result so the
@@ -255,6 +257,8 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         SpotifyResponsePatcher.probeNPVModuleBody(url: url, taskID: task.taskIdentifier, data: data)
         // 排障：全响应扫「预热 / 预发行」关键字（坏卡的数据来源）。只读、不改字节。
         SpotifyResponsePatcher.probePreReleaseNeedles(url: url, taskID: task.taskIdentifier, data: data)
+        // 排障：全量请求清单 + ISO 日期串（找到"那张卡拿到的日期"到底搭哪条响应来）。只读、不改字节。
+        SpotifyResponsePatcher.probeTrafficBody(url: url, taskID: task.taskIdentifier, data: data)
         if CasitaResponseProbe.shouldProbe(url) {
             CasitaResponseProbe.append(data, for: task)
         }

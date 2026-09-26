@@ -429,10 +429,12 @@ enum SpotifyResponsePatcher {
         return true
     }
 
-    /// 命中处前后各 80 字节的可打印上下文（不可打印字符换成 `·`）。
-    private static func printableContext(_ bytes: [UInt8], around index: Int) -> String {
-        let start = max(0, index - 80)
-        let end = min(bytes.count, index + 80)
+    /// 命中处前后各 `radius` 字节的可打印上下文（不可打印字符换成 `·`）。
+    /// 默认 80 —— `[PreRelease]` 探针原本就是这个半径，行为不变；
+    /// 新增的日期串扫描用 60（日期上下文通常更短，短一点一行才放得下）。
+    private static func printableContext(_ bytes: [UInt8], around index: Int, radius: Int = 80) -> String {
+        let start = max(0, index - radius)
+        let end = min(bytes.count, index + radius)
         var out = ""
         out.reserveCapacity(end - start)
         for byte in bytes[start..<end] {
@@ -443,6 +445,186 @@ enum SpotifyResponsePatcher {
             }
         }
         return out
+    }
+
+    // MARK: - 全量请求清单 + ISO 日期串扫描（预热卡最后一条未封的路）
+
+    /// 前面三支探针把能排除的都排除了（见 `LYRICS_MODULE_NEXT_STEPS.md` §37 与 §38）：
+    ///
+    ///   · **元素列表**：假卡出现在元素列表**连 `12` 都没有**的曲目上（一场 79 条 manifest 全是
+    ///     `2/3/4` 或 `5/2/3/4`）；
+    ///   · **三个旁路模块**：`cultural-moments` / `merch-npv` 恒为 404；`EventCardInfoService`
+    ///     只在有演唱会的曲目上 200，体里是 `spotify:concert:` + `2027-01-23T16:30:00+0900`；
+    ///   · **关键字探针**：整场会话里 11 个"预热 / 预发行"关键字在业务响应上**零命中**，
+    ///     唯一命中是 `bootstrap` / `customize` 的 **flag 名字**。
+    ///
+    /// 而假卡的日期是**绝对日期**（`发布时间：2021年5月27日` / `2023年8月10日`），
+    /// 与正版卡的相对文案（`在 6 天内发布`）是两种渲染 —— 说明它拿到的是一份**带日期的数据**，
+    /// 只是那份数据以 protobuf 字段到达，没有明文关键字。
+    ///
+    /// 所以这一支只做两件事：
+    ///
+    ///   1. **全量请求清单**：每一条响应一行 `[Traffic] resp … host path status type size`
+    ///      —— 这是"某条请求到底发生过没有"的唯一直接判据。哪条路径在"卡在场"的那一次
+    ///      出现、在"重进"的那一次不出现，谁就是嫌疑人（§37 已用人工对照证明
+    ///      `Fade Away` 第一次进有旁路请求、重进没有）；
+    ///   2. **ISO 日期串扫描**：在**所有**响应字节里找 `NNNN-NN-NN`。
+    ///      `EventCardInfoService` 的日期就是明文（`2027-01-23T16:30:00+0900`），
+    ///      所以"预热卡那份数据"如果来自网络，它的日期**大概率也是明文**，
+    ///      命中处打前后各 60 字节上下文 —— 一眼能看出这是发行日、演出日还是别的。
+    ///
+    /// 顺带补两个**已知盲点**：
+    ///   · `discovery-from-seed`（每首歌必发一次，是 §37 还没排除的一个端点）按路径 dump 前
+    ///     2048 字节 hex；
+    ///   · `[PreRelease]` 探针有个 `256KB` 上限、超了**完全静默** —— 这里把"跳过的大响应"
+    ///     也记一行，免得再出现"没命中"与"没扫"分不清。
+    ///
+    /// **只读、只打日志、不改任何字节。**
+    private static var _trafficRequestCount = 0
+    private static var _trafficBodySize: [Int: Int] = [:]
+    private static var _trafficDateHits = Set<String>()
+    private static var _trafficDateHitCount = 0
+    private static var _trafficDumped: [String: Int] = [:]
+    private static var _trafficSkippedLarge = 0
+    private static var _trafficAnnounced = false
+    /// 每条 path 最多 dump 几份 hex（同一 path 常常多次请求，只要前几份就够比对）。
+    private static let trafficDumpLimit = 2
+    /// 日期串命中最多打这么多行，防止某个大 JSON 刷爆日志。
+    private static let trafficDateHitLimit = 80
+
+    /// 由 `didReceiveResponse` 调用：记下每一条响应的**元信息**（状态 / 类型 / 大小）。
+    ///
+    /// 与 `probeLyricsResponseHeaders` / `probeNPVModuleHeaders` 的区别：那两个只看特定端点，
+    /// 这个**看全部** —— 目的就是把"客户端到底请求了什么"变成一份完整清单。
+    static func probeTrafficHeaders(url: URL, response: HTTPURLResponse) {
+        lock.lock()
+        _trafficRequestCount += 1
+        let index = _trafficRequestCount
+        let announce = !_trafficAnnounced
+        if announce { _trafficAnnounced = true }
+        lock.unlock()
+
+        if announce {
+            writeDebugLog("[Traffic] active — logging every response (host path status type size)")
+        }
+
+        let type = response.value(forHTTPHeaderField: "Content-Type") ?? "-"
+        let length = response.value(forHTTPHeaderField: "Content-Length") ?? "-"
+        writeDebugLog(
+            "[Traffic] resp #\(index) status=\(response.statusCode) type=\(type)"
+                + " len=\(length) host=\(url.host ?? "?") path=\(url.path)"
+        )
+    }
+
+    /// 由 `didReceiveData` 调用：报一次该 task 的首块体积，再扫 ISO 日期串、按需 dump hex。
+    static func probeTrafficBody(url: URL, taskID: Int, data: Data) {
+        guard !data.isEmpty else { return }
+
+        lock.lock()
+        // ── 体积：该 task 第一次收到数据时报一次（分块到达时"首块"就是我们要的信号）──
+        let isFirstChunk = _trafficBodySize[taskID] == nil
+        _trafficBodySize[taskID] = (_trafficBodySize[taskID] ?? 0) + data.count
+        if _trafficBodySize.count > 256 { _trafficBodySize.removeAll() }
+
+        let path = url.path
+        var dumpHex: String?
+        if isTrafficDumpEndpoint(path), (_trafficDumped[path] ?? 0) < trafficDumpLimit {
+            _trafficDumped[path] = (_trafficDumped[path] ?? 0) + 1
+            dumpHex = data.prefix(2048).map { String(format: "%02x", $0) }.joined()
+        }
+
+        let tooLarge = data.count > 256 * 1024
+        var skipped = 0
+        if tooLarge {
+            _trafficSkippedLarge += 1
+            skipped = _trafficSkippedLarge
+        }
+        lock.unlock()
+
+        if isFirstChunk {
+            writeDebugLog(
+                "[Traffic] body first chunk \(data.count)B"
+                    + " host=\(url.host ?? "?") path=\(path)"
+            )
+        }
+
+        if let dumpHex {
+            writeDebugLog(
+                "[Traffic] hex path=\(path) chunk=\(data.count)B"
+                    + " hex\(dumpHex.count / 2)B=\(dumpHex)"
+            )
+        }
+
+        if tooLarge {
+            if skipped <= 8 {
+                writeDebugLog(
+                    "[Traffic] ⚠️ chunk > 256KB (\(data.count)B) — string/date scan skipped"
+                        + " path=\(path) (skipped=\(skipped))"
+                )
+            }
+            return
+        }
+
+        scanForISODates(url: url, data: data)
+    }
+
+    /// 值得 dump 前 2KB hex 的路径：目前是"每首歌必发、但还没被排除"的那一个。
+    private static func isTrafficDumpEndpoint(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        return lower.contains("discovery-from-seed")
+            || lower.contains("eventcardinfoservice")
+            || lower.contains("scrollsita/v1/scroll")
+    }
+
+    /// 在响应字节里找 `NNNN-NN-NN`（ISO 日期前缀）。命中处打前后各 60 字节可打印上下文。
+    private static func scanForISODates(url: URL, data: Data) {
+        let bytes = [UInt8](data)
+        var found: [(date: String, context: String)] = []
+        var index = 0
+
+        while index + 10 <= bytes.count {
+            guard bytes[index] >= 0x30, bytes[index] <= 0x39 else { index += 1; continue }
+            if isISODatePrefix(bytes, at: index) {
+                let date = String(decoding: bytes[index..<(index + 10)], as: UTF8.self)
+                let context = printableContext(bytes, around: index, radius: 60)
+                found.append((date, context))
+                index += 10
+            } else {
+                index += 1
+            }
+        }
+
+        guard !found.isEmpty else { return }
+
+        var toReport: [(String, String)] = []
+        lock.lock()
+        for hit in found {
+            guard _trafficDateHitCount < trafficDateHitLimit else { break }
+            guard _trafficDateHits.insert("\(url.path)|\(hit.date)").inserted else { continue }
+            _trafficDateHitCount += 1
+            toReport.append((hit.date, hit.context))
+        }
+        lock.unlock()
+
+        for hit in toReport {
+            writeDebugLog(
+                "[Traffic] date=\(hit.date) path=\(url.path) ctx=\(hit.context)"
+            )
+        }
+    }
+
+    /// `NNNN-NN-NN` 的形状判定（只查形状，不查合法性 —— 宁可多报一行也别漏）。
+    private static func isISODatePrefix(_ bytes: [UInt8], at index: Int) -> Bool {
+        for offset in 0..<10 {
+            let byte = bytes[index + offset]
+            switch offset {
+            case 4, 7:
+                if byte != 0x2D { return false }        // '-'
+            default:
+                if byte < 0x30 || byte > 0x39 { return false }   // 0-9
+            }
+        }
+        return true
     }
 
     // MARK: - 「禁用歌词功能」
