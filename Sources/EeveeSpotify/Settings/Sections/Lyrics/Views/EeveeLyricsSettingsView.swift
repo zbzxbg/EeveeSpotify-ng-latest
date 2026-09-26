@@ -190,12 +190,16 @@ struct EeveeLyricsSettingsView: View {
         }
     }
 
-    /// 「屏蔽正在播放页的预热卡（整个 provider）」。
+    /// 「屏蔽正在播放页的预热卡（整个 provider）」。**默认开**。
     ///
-    /// 同样**没有 footer**。它是"那张日期过期的『即将发布』卡"的**止血开关**：
-    /// 打开后把解密二进制里逐字找到的那条 scope 钉成 false，
-    /// **正在播放页**这一族预热 provider 不再运行 ⇒ 那张卡必然消失。
-    /// 代价明说：正在播放页的**任何**预热卡都会消失（专辑页 / 关注页不受影响）。
+    /// 同样**没有 footer**。它拦的是
+    /// `…NowPlayingViewProviderServiceImpl.registerScrollProviderIn:` ——
+    /// 这一族 provider 不注册 ⇒ 正在播放页那张「即将发布」卡不存在。
+    ///
+    /// 为什么默认开：这个 bug 是**偶发/竞态**（"可能这首歌有，可能那首歌有"），
+    /// 按歌复现不了 ⇒ 不该做成"要用户自己去撞、再去打开"的开关。
+    /// 代价明说：正在播放页的**任何**预热卡都会消失（专辑页 / 关注页不受影响）；
+    /// 想要真预热卡的人可以把这个开关关掉。
     @ViewBuilder private func disableNpvPrereleaseProviderSection() -> some View {
         Section {
             Toggle(

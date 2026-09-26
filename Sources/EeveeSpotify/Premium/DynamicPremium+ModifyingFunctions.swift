@@ -430,27 +430,24 @@ private let propertyReplacements = [
     // 而"与「关于艺人」并列的歌词卡片"正是这个词的字面意思（入口：点了才进全屏歌词）。
     // scope/name 都来自服务端实际下发的内容（不是猜的）→ `setBool` 是"钉已存在的值"，
     // 不存在命中 0 条的空枪风险；服务端要是本来就是 true，这一行等于没写。
-    EeveePropertyReplacement(name: "lyrics_entry_point_enabled", scope: "ios-feature-lyrics", modification: .setBool(true)),
-
-    // 「正在播放页的预热卡」整族 provider 的总闸 —— 2026-09-26 解密二进制取证，见
-    // `LYRICS_MODULE_NEXT_STEPS.md` §45。默认**不生效**（`setBool(false)` 只在
-    // 服务端真的下发了这条 flag 时才动手；而且是否执行由设置开关
-    // `isNowPlayingPrereleaseProviderDisabled` 决定，见 `modifyAssignedValues`）。
-    //
-    // scope/name 都是在解密二进制的字符串里逐字找到的（连 key 一起）：
-    //   `com.spotify.service.prerelease.nowplayingviewprovider`
-    //   `ios-prerelease-nowplayingviewprovider-impl.is_enabled`
-    // 也就是说这一族是**正在播放页专用**：关掉它，专辑页 / 关注页 / 搜索页那些
-    // prerel 表面不受影响，只有 NPV 里那张卡没了。
-    EeveePropertyReplacement(
-        name: "is_enabled",
-        scope: "ios-prerelease-nowplayingviewprovider-impl",
-        modification: .setBool(false)
-    )
+    EeveePropertyReplacement(name: "lyrics_entry_point_enabled", scope: "ios-feature-lyrics", modification: .setBool(true))
 ]
 
-/// 上面那两条 flag 的名字（开关判定用，避免再抄一遍字面量）。
+/// 上面那条 flag 的名字（开关判定用，避免再抄一遍字面量）。
 private let lyricsEntryPointFlagName = "lyrics_entry_point_enabled"
+
+/// **已否掉的那条路**（2026-09-26，日志 13 之后）：曾经以为
+/// `ios-prerelease-nowplayingviewprovider-impl.is_enabled` 是正在播放页预热 provider 的闸，
+/// 于是加了一条 `.setBool(false)`。真机结果是：用户把「屏蔽过期的『即将发布』卡」打开、
+/// 启动日志明写 `[INIT] npv prerelease provider: FORCED OFF`，**卡照样出现**
+/// （`Detour`，`[PrerelProbe] CARD SIGHTED … 即将发布 / 发布时间：2025年4月3日`）。
+///
+/// ⇒ 这条 flag **不是闸**，替换已删除（留着只会带来未知副作用）。两个名字常量保留，
+/// 只为让后来者一眼看到"这条试过、别再来回改"。
+///
+/// 真正生效的落点是 `PrereleaseNPVProviderRegistrationHook`：拦
+/// `…NowPlayingViewProviderServiceImpl.registerScrollProviderIn:`，
+/// 方法名来自日志 13 探针从 ObjC 方法表里读出的真实数据。
 private let npvPrereleaseFlagName = "is_enabled"
 private let npvPrereleaseFlagScope = "ios-prerelease-nowplayingviewprovider-impl"
 
@@ -462,20 +459,6 @@ private func reportEntryPointFlagSkippedOnce() {
     guard !entryPointFlagSkippedReported else { return }
     entryPointFlagSkippedReported = true
     writeDebugLog("[Flags] lyrics_entry_point_enabled — SKIPPED (switch off, A/B)")
-}
-
-/// 「NPV 预热 provider 已按开关跳过」同理：只打一次，且**必须**打 ——
-/// 命中数照常由 `reportLyricsReplacementOutcome` 打印，光看命中数分不出
-/// "我们改了" 与 "服务端本来就是这个值"。
-private var npvPrereleaseSkippedReported = false
-
-private func reportNPVPrereleaseSkippedOnce() {
-    guard !npvPrereleaseSkippedReported else { return }
-    npvPrereleaseSkippedReported = true
-    writeDebugLog(
-        "[Flags] \(npvPrereleaseFlagScope).\(npvPrereleaseFlagName)"
-            + " — SKIPPED (switch off): not forcing the NPV prerelease provider off"
-    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -605,15 +588,6 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
         if replacement.name == lyricsEntryPointFlagName,
            !NgzhwmSettingsViewModel.isLyricsEntryPointFlagForced {
             reportEntryPointFlagSkippedOnce()
-            continue
-        }
-
-        // 「屏蔽正在播放页预热卡」：默认 OFF ⇒ 这一条**不存在**（不改既有行为）。
-        // 打开时才真的把 `ios-prerelease-nowplayingviewprovider-impl.is_enabled` 钉成 false。
-        if replacement.name == npvPrereleaseFlagName,
-           replacement.scope == npvPrereleaseFlagScope,
-           !NgzhwmSettingsViewModel.isNowPlayingPrereleaseProviderDisabled {
-            reportNPVPrereleaseSkippedOnce()
             continue
         }
 

@@ -61,7 +61,8 @@ enum PrereleaseCardProbe {
     ]
 
     private static var didRunStartupProbe = false
-    private static var didReportCardSighting = false
+    /// 第几次进入正在播放页（用来把"第一次进 = 假卡"与"重进 = 真卡"分开）。
+    private static var sweepOrdinal = 0
     private static var sweepTimer: Timer?
 
     // MARK: - 1) 启动期：类到底在不在、有没有方法表
@@ -130,45 +131,73 @@ enum PrereleaseCardProbe {
         return names.sorted()
     }
 
-    // MARK: - 2) 页面级：卡在视图树里是谁
+    // MARK: - 2) 页面级：卡面文字的时间线（被动监视）
 
-    /// 进正在播放页时起表：10 秒内每 1s 扫一次，**只报第一次**命中。
+    /// 进正在播放页就起表：**每秒扫一次，直到离开页面**，只在卡面**变化**时记一条。
     ///
-    /// 为什么是轮询而不是"进页面扫一次"：日志 11 已经踩过这个坑 —— 卡是页面起来之后
-    /// 才渲染的，快照式 dump 两次都撞在空档/别的页面上。这里只扫 10 秒、只在命中时报一次，
-    /// 不会刷屏。
+    /// ── 为什么改成"一直开着 + 只记变化"（2026-09-26 第三次修）──────────────────
+    ///
+    /// 用户的关键口径：「**这玩意一直就不是稳定复现的。可能这首歌有，可能那首歌有。**」
+    ///
+    /// 也就是说：`12` 既不是假卡的必要条件（有的歌没有 `12` 也出假卡），
+    /// 也不是充分条件（Detour 有 `12`，第一次进照样是假卡）。⇒ 剩下唯一能解释
+    /// "同一首歌有时有有时没有"的形状就是**页面首建时的一次性竞态**：
+    /// provider 刚注册、正确数据还没到，就先拿一份陈旧快照渲了一张。
+    ///
+    /// 竞态没法"按歌复现"，所以**不能再要求用户去撞**。这里改成被动监视：
+    ///
+    ///   · **不再 10 秒后自停**，页面在就每秒扫（1s × 视图树遍历，很轻）；
+    ///   · **只在卡面文字变化时报**（同一份文字不重复打），所以一条日志 = 一次状态跃迁；
+    ///   · 每次进入单独编号，`entry #N` 直接对上"第几次进听歌页"。
+    ///
+    /// 于是日志自然长成一条**时间线**（下面的例子是"假卡→真卡"的样子）：
+    ///
+    /// ```
+    /// [PrerelProbe] card monitor #1 started
+    /// [PrerelProbe] entry#1.1 t=2s CARD texts=即将发布 / 发布时间：2025年4月3日
+    /// [PrerelProbe] entry#1.2 t=6s CARD texts=在 3 天内发布 / 2025・即将发布的新歌
+    /// ```
+    ///
+    /// 有这条时间线，"假卡是先出现后被替换"还是"一直错着"一眼可判 ——
+    /// 这正是竞态假设唯一能证伪的地方。
     static func startCardSweep(from host: UIView?) {
         guard let host else { return }
-        didReportCardSighting = false
+        sweepOrdinal += 1
+        let ordinal = sweepOrdinal
         sweepTimer?.invalidate()
 
         var ticks = 0
+        var lastSignature: String?
         sweepTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
             ticks += 1
-            if ticks > 10 || didReportCardSighting {
-                timer.invalidate()
-                sweepTimer = nil
+            guard let found = findPrereleaseView(in: host) else {
+                // 卡不在场也要能看出来（否则"没有卡"与"扫不到"分不清）。
+                if lastSignature != nil {
+                    lastSignature = nil
+                    writeDebugLog("[PrerelProbe] entry#\(ordinal) t=\(ticks)s CARD GONE")
+                }
                 return
             }
-            if let found = findPrereleaseView(in: host) {
-                didReportCardSighting = true
-                let hostChain = viewChain(of: found)
-                let texts = visibleTexts(in: found)
-                writeDebugLog(
-                    "[PrerelProbe] CARD SIGHTED at tick \(ticks)"
-                        + " class=\(NSStringFromClass(type(of: found)))"
-                        + " frame=\(found.frame)"
-                )
-                writeDebugLog("[PrerelProbe]   chain=\(hostChain)")
-                writeDebugLog("[PrerelProbe]   texts=\(texts.joined(separator: " / "))")
-                timer.invalidate()
-                sweepTimer = nil
-            }
+
+            let texts = visibleTexts(in: found)
+            let signature = texts.joined(separator: " / ")
+            guard signature != lastSignature else { return }
+            let isFirst = lastSignature == nil
+            lastSignature = signature
+
+            writeDebugLog(
+                "[PrerelProbe] entry#\(ordinal) t=\(ticks)s "
+                    + "\(isFirst ? "CARD (first seen)" : "CARD CHANGED")"
+                    + " class=\(NSStringFromClass(type(of: found)))"
+                    + " frame=\(found.frame)"
+            )
+            writeDebugLog("[PrerelProbe]   entry#\(ordinal) chain=\(viewChain(of: found))")
+            writeDebugLog("[PrerelProbe]   entry#\(ordinal) texts=\(signature)")
         }
         if let timer = sweepTimer {
             RunLoop.main.add(timer, forMode: .common)
         }
-        writeDebugLog("[PrerelProbe] card sweep started (10s, 1s ticks)")
+        writeDebugLog("[PrerelProbe] card monitor #\(ordinal) started (every 1s until the page goes away)")
     }
 
     static func stopCardSweep() {
@@ -209,19 +238,33 @@ enum PrereleaseCardProbe {
         return chain.joined(separator: " < ")
     }
 
+    /// 这张卡里所有能读到的文字。
+    ///
+    /// 为什么要连 `accessibilityLabel` 一起收：日志 13 只抓到 `即将发布 / 发布时间：2025年4月3日`
+    /// 两条 —— 而判断"这张卡是不是错"恰恰需要**更多**上下文（专辑名、艺人、"预收藏"按钮的
+    /// 选中态）。`accessibilityLabel` 在按钮/图标类控件上往往比 `title` 更全。
     private static func visibleTexts(in root: UIView) -> [String] {
         var out: [String] = []
+        var seen = Set<String>()
+
+        func add(_ text: String?) {
+            guard let text, !text.isEmpty, out.count < 24 else { return }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return }
+            out.append(trimmed)
+        }
+
         func walk(_ view: UIView, depth: Int) {
-            guard depth < 6, out.count < 12 else { return }
-            if let label = view as? UILabel, let text = label.text, !text.isEmpty {
-                out.append(text)
+            guard depth < 8, out.count < 24 else { return }
+            if let label = view as? UILabel { add(label.text) }
+            if let button = view as? UIButton {
+                add(button.title(for: .normal))
+                add(button.accessibilityLabel)
             }
-            if let button = view as? UIButton,
-               let title = button.title(for: .normal), !title.isEmpty {
-                out.append("[btn]\(title)")
-            }
+            if !(view is UILabel) { add(view.accessibilityLabel) }
             for sub in view.subviews { walk(sub, depth: depth + 1) }
         }
+
         walk(root, depth: 0)
         return out
     }

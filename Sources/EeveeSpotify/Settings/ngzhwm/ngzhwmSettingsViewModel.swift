@@ -157,26 +157,20 @@ class NgzhwmSettingsViewModel: ObservableObject {
 
     /// 「屏蔽正在播放页的预热卡（整个 provider）」—— 见 `isNowPlayingPrereleaseProviderDisabled`。
     ///
-    /// 默认 **OFF**（保持既有行为：该出现的预热卡照常出现）。打开后我们把服务端那条
-    /// `ios-prerelease-nowplayingviewprovider-impl.is_enabled` 钉成 **false**，
-    /// 于是**正在播放页**这一族预热 provider 不再运行。
+    /// 默认 **ON**（2026-09-26 由 OFF 改成 ON）：
     ///
-    /// 为什么是这条（2026-09-26，解密二进制取证 `LYRICS_MODULE_NEXT_STEPS.md` §45）：
-    /// 那张"日期早已过期"的假卡是 `Prerelease.UI.PrereleaseCardNowPlaying`，它的数据来自
-    /// **正在播放页专用**的 `PrereleaseNowPlayingScrollDataProvider`
-    /// （`com.spotify.service.prerelease.nowplayingviewprovider`）。此前所有失败的路都是
-    /// 在错误的一层动手：
+    ///   · 这个 bug 是**偶发/竞态**（用户原话："可能这首歌有，可能那首歌有"），
+    ///     按歌复现不了 ⇒ 不该让用户自己去撞、也不该把"别再出现"做成一个要自己去打开的开关；
+    ///   · 实际落点是 `PrereleaseNPVProviderRegistrationHook`：拦
+    ///     `…NowPlayingViewProviderServiceImpl.registerScrollProviderIn:`，
+    ///     开关开着就**不注册**这一族 provider。之所以不用服务端 flag，
+    ///     是因为日志 13 已经证明 `ios-prerelease-nowplayingviewprovider-impl.is_enabled`
+    ///     **不是闸**（钉成 false 也照样出卡）。
     ///
-    ///   · 剥元素 `12` —— 假卡恰恰出现在**没有 `12`** 的曲目上，只杀正版、杀不掉坏的；
-    ///   · 那条歌词 flag —— 布尔量变不出"2021年5月27日"这种数据，且那次 A/B 是空跑
-    ///     （customize 走 304 无 body，代码整段没执行）；
-    ///   · 网络层 —— 十份日志里日期一次都没在网络上出现过；
-    ///   · 渲染层 —— 坏卡曲目上我们的歌词层**根本不挂载**（无逐词数据），抓不到出场窗口。
-    ///
-    /// ⇒ 唯一同时满足"能碰到"且"就在正确的层"的落点，就是这个 provider。
-    /// 代价明说：**正在播放页的任何预热卡都会消失**；专辑页 / 关注页 / 搜索页那些
-    /// prerel 表面不受影响（它们的 provider 不在这个 scope 下）。
+    /// 代价明说：**正在播放页的任何预热卡都会消失**（包括"真的"那张）；
+    /// 专辑页 / 关注页 / 搜索页那些 prerel 表面不受影响 —— 它们的 provider 不走这条注册。
+    /// 设置页里仍留开关：想要真预热卡的人可以自己关掉。
     static var isNowPlayingPrereleaseProviderDisabled: Bool {
-        bool(forKey: nowPlayingPrereleaseProviderKey, defaultValue: false)
+        bool(forKey: nowPlayingPrereleaseProviderKey, defaultValue: true)
     }
 }

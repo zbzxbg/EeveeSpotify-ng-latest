@@ -497,6 +497,111 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 46. 日志 13：探针**当场抓到卡**；flag 判死；改成拦 `registerScrollProviderIn:`（2026-09-26）
+
+**材料**：`C:\dsh\readlog\eeveespotify_debug 13.log`（149,643B，13:55:32–13:57 前后，UTC）。
+这一场**带 §45 之后的新代码**（`[INIT] npv prerelease provider:` / `[PrerelProbe]` 都出现了），
+用户设置：**「屏蔽过期的『即将发布』卡」开着**。
+
+### 46.1 探针第一次拿到"卡到底是什么"
+
+```
+[INIT] npv prerelease provider: FORCED OFF                 ← 开关开着，flag 也钉了
+[PrerelProbe] npv-provider: FOUND Prerelease_NowPlayingViewProviderImpl.PrereleaseNowPlayingScrollDataProvider objcMethods=1
+[PrerelProbe] npv-service:  FOUND …NowPlayingViewProviderServiceImpl objcMethods=3
+                 · .cxx_destruct / init / **registerScrollProviderIn:**   ← ★
+[PrerelProbe] data-loader:  FOUND …PrereleaseDataLoaderServiceImpl objcMethods=6
+[PrerelProbe] card: NOT resolvable（私有嵌套类，点号/mangled 都试过）
+[PrerelProbe] CARD SIGHTED at tick 1
+   class=_TtCOOO17Prerelease_ECMKit24PrereleaseCardNowPlaying2UI7Private9MediaView
+   chain= …MediaView < Encore.StackView < Element_UIKit.ElementView
+              < Element_List.ElementContentView < Element_List.CollectionViewCell < UICollectionView
+   texts=即将发布 / ￼ 发布时间：2025年4月3日
+```
+
+⇒ **卡是真实存在的客户端视图**，宿主是正在播放页那个 `Element_List` 列表的一格（§45 的组件结论全部坐实）。
+
+### 46.2 两个结论被这一场**改写**
+
+1. **元素 `12` 又回到"有它就出卡"这一边。** `Detour`（`49fLfatdFL1wJ0d9dKElTK`）这一场
+   **确实带 `12`**：`elements=[2{artist:33rnQ…} 12{album:1JITwPDZUpf7XUltkfWYJI,…6cGq1X} 3 4]`，
+   而整场**只有它出了卡**（另一首 `3FSULbXw…` 只有 `2/3/4`，两次 sweep 都没有卡）。
+   时间线也严丝合缝：`13:56:11` scroll（带 `12`）→ `13:56:25` 重取 → **`13:56:26` 抓到卡**。
+   ⚠️ §40 之后又来回翻了一次：**别再"剥 `12` / 不剥 `12`"反复改** —— 这一支只影响正版卡。
+2. **那条 flag 正式判死。** 开关开着、`FORCED OFF` 已打，卡照样出现 ⇒
+   `ios-prerelease-nowplayingviewprovider-impl.is_enabled` **不是闸**。
+   替换已从 `propertyReplacements` **删除**（留着只会带来未知副作用），
+   只保留两个名字常量 + 一大段"试过、别再来回改"的注释。
+   附带教训：那条替换**命令确实执行了，但没留任何痕迹** —— `reportLyricsReplacementOutcome`
+   的过滤是 `isFlagOfInterest`，而 `is_enabled` 不含任何关键字。以后凡是新加的替换，
+   要么把名字塞进 `npvFlagNeedles`，要么自己单独打一行。
+
+### 46.2 ⚠️ 重要更正（用户补充口径，2026-09-26 当晚）
+
+**用户原话：「这首歌有真正的预热卡片。在假预热出现的时候，退出听歌页面，重进，真预热卡片展示。」**
+
+这一句把上面第 1 条**推翻**：`Detour` **本来就有真预热卡**。所以
+
+- 「整场只有 Detour 出卡」**不能**当作"`12` 带来的假卡"的证据 —— 只有它**有 `12`**，
+  自然只有它会有卡（真的那张）。上一版把它当成"有 `12` 就出假卡"是**错的**；
+- 真实的机制改为：**同一首歌、同一个 `12`，第一次进显示的是假卡，退出重进才显示真卡。**
+  ⇒ **假卡不是元素 `12` 渲染的**，而且它**活不过一次页面重建**；
+- 于是"假卡从哪来"只剩一个方向：**首建页面时的一次性渲染**（provider 刚注册、
+  数据还没到 / 用的是一份陈旧快照），重进时那份状态已经被换掉了。
+  §46.3 那个 `registerScrollProviderIn:` 钩子正好打在这个"一次性"的位置上，
+  所以它仍然是对的实验 —— 但**判据要换**。
+
+**判据（本轮的探针改动就是为了它）**：探针原来"每次进入只报第一条命中"，
+于是**永远看不到重进之后换成哪张卡**。现在按卡面文字去重、每次进入单独编号：
+
+```
+[PrerelProbe] card sweep #1 started
+[PrerelProbe] CARD #1 in entry #1 … texts=即将发布 / 发布时间：2025年4月3日     ← 假卡
+[PrerelProbe] card sweep #2 started
+[PrerelProbe] CARD #1 in entry #2 … texts=在 N 天内发布 / …                      ← 真卡（文案不同）
+```
+
+两次 `texts=` **明显不同**才算"假卡被换掉"；如果两次一样，那就是我理解错了口径，
+得回头再问用户"真卡长什么样"。
+
+**顺带说明取舍**：当前这个开关（拦注册）如果生效，大概率**两张卡一起没**
+（真卡也走同一个 provider）。用户已明确要的是"不再出现假卡"，所以先按"全灭"交付；
+若日志证明"拦注册 = 两张都没"，再谈"只挡过期的"（需要 provider 数据里的 `releaseTime`，
+目前还没有它的静态证据）。
+
+### 46.3 本轮改动：拦在**注册**那一步
+
+| 文件 | 改动 |
+|---|---|
+| `Premium/Hooks/PrereleaseNPVProviderRegistrationHook.x.swift` | **新增**。`ClassHook` 挂 `Prerelease_NowPlayingViewProviderImpl.NowPlayingViewProviderServiceImpl`（点号形式，与探针 resolve 到的同一个字符串），拦 `registerScrollProviderIn(_ feature: NSString)`：开关开着就**不调 `orig`** ⇒ 这条注册被吞掉；关着则原样放行。逐 `(feature, provider)` 打一行，静态状态加 `NSLock` |
+| `DynamicPremium+ModifyingFunctions.swift` | **删掉**那条 `.setBool(false)` 替换与它的跳过分支/report 函数；常量保留作考古注释 |
+| `Tweak.x.swift` | `[INIT]` 那行改成 `BLOCK registration (switch ON)` / `untouched (switch off)`，并说明开关已不走 flag |
+| `Premium/Helpers/PrereleaseCardProbe.swift` | 卡面文字 dump 扩到 **24 条**、深度 8，并收 `accessibilityLabel`（日志 13 只抓到两条，不够判断"这张卡是不是错"） |
+
+### 46.4 判读（下一次日志）
+
+```
+[PrerelHook] hook fired — first call                       ← 钩子挂上了
+[PrerelHook] register feature=… provider=… — switch=ON(decline)
+[PrerelHook] DECLINED registration (switch ON) feature=…
+```
+
+- 只有 `hook fired`、没有 `register` ⇒ 这不是 NPV 预热卡的入口，换
+  `PrereleaseDataLoaderServiceImpl` 那几个方法（探针已列出名字）；
+- 有 `DECLINED` 卡还在 ⇒ 同上换落点；
+- 有 `DECLINED` 且卡没了 ⇒ 收工。
+
+### 46.5 ⚠️ 未验证
+
+- **没有编译验证**（本机无 Swift 工具链；`Tools/l10n_lint.py` 在这个环境一律 `0xC0000142`）。
+  新增的 `.x.swift` 落在 `Sources/EeveeSpotify/Premium/Hooks/`，
+  `Makefile` 用 `find Sources/EeveeSpotify -name '*.swift'` 递归收集，会自动编进去。
+- 钩子的类名（`Prerelease_NowPlayingViewProviderImpl.NowPlayingViewProviderServiceImpl`）
+  **是探针在真机上 resolve 成功过的字符串**，不是二进制猜的；但"Orion 能不能在
+  `BaseLyricsGroup` 激活时挂上它"仍要真机裁决 —— 第一次输出 `hook fired` 即证明成立。
+
+---
+
 ## 45. 解密二进制定位：这张卡是 `PrereleaseCardNowPlaying`，数据源是「正在播放页专用 provider」（2026-09-26）
 
 **材料**：`C:\dsh\ipa\Spotify- Music and Podcasts_9.1.86_decrypted.ipa`
