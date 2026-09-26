@@ -606,9 +606,11 @@ enum SpotifyResponsePatcher {
         }
         lock.unlock()
 
-        for hit in toReport {
+        // ⚠️ `toReport` 的类型是 `[(String, String)]` —— 元组标签在存进数组时就丢了，
+        // 所以这里必须按位置解构，写成 `hit.date` 会编译不过（CI 已经报过一次）。
+        for (date, context) in toReport {
             writeDebugLog(
-                "[Traffic] date=\(hit.date) path=\(url.path) ctx=\(hit.context)"
+                "[Traffic] date=\(date) path=\(url.path) ctx=\(context)"
             )
         }
     }
