@@ -447,6 +447,11 @@ struct EeveeSpotify: Tweak {
                 + "\(NgzhwmSettingsViewModel.isNowPlayingPrereleaseProviderDisabled ? "BLOCK registration (switch ON)" : "untouched (switch off)")"
         )
         PrereleaseCardProbe.runStartupProbeOnce()
+        // 上面那个探针是"猜名字去 resolve"，对**私有嵌套类**取不到（日志 13/14 里
+        // `card: NOT resolvable`）。这一支改用 `objc_getClassList` 把**真实类名**捞出来，
+        // 连方法表一起打 —— 要变成"只挡假的"，就必须先知道"这一格是被谁填的"。
+        // 同样是**只读**：只枚举、只打日志。
+        PrereleaseRuntimeClassDump.runOnce()
 
         // For 9.1.x, activate premium patching and lyrics
         if EeveeSpotify.hookTarget == .v91 {
