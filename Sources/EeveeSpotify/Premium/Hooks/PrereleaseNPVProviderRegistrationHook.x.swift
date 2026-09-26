@@ -35,14 +35,18 @@ import Orion
 /// · 只有设置里打开「屏蔽过期的『即将发布』卡」时才 `return`（不调 `orig`）；
 ///   默认关闭时**逐字节保持原行为** —— 每次都原样调用 `orig.registerScrollProviderIn:`；
 /// · 只挂这一个类，不做通配；`registerScrollProviderIn:` 在二进制里确认存在；
-/// · 每一对 `(feature, provider 类名)` 只打一行日志，方便确认"这一族到底叫什么"。
+/// · 每一对 `(payload, provider 类名)` 只打一行日志，方便确认"这一族到底叫什么"；
+/// · ⚠️ **参数类型必须是 `Any`**：这个方法收的是一批 feature（数组），
+///   写成 `NSString` 会让 Swift 去 `_unconditionallyBridgeFromObjectiveC`、
+///   对 NSArray 问 `length` ⇒ 抛 `NSInvalidArgumentException` ⇒ `abort()`，
+///   表现就是**播歌时闪退**（2026-09-26 23:57 的真机崩溃报告，见函数内注释）。
 ///
 /// ── 日志怎么读（一次复现就能定性）─────────────────────────────────────────────
 ///
 /// ```
 /// [PrerelHook] hook fired — first call                  ← 钩子挂上了
-/// [PrerelHook] register feature=… provider=… — switch=ON(decline)
-/// [PrerelHook] DECLINED registration (switch ON) feature=…
+/// [PrerelHook] register payload=… provider=… — switch=ON(decline)
+/// [PrerelHook] DECLINED registration (switch ON) payload=…
 /// ```
 ///
 /// · **只有 `hook fired` 没有 `register`** ⇒ 这条路不是 NPV 预热卡的入口，
@@ -77,8 +81,19 @@ class PrereleaseNPVProviderRegistrationHook: ClassHook<NSObject> {
         return true
     }
 
-    func registerScrollProviderIn(_ feature: NSString) {
-        let featureName = feature as String
+    func registerScrollProviderIn(_ payload: Any) {
+        // ⚠️⚠️ 参数类型**不能**写成 `NSString` —— 真机崩溃报告（2026-09-26 23:57:58）：
+        //
+        //     -[NSArray length]: unrecognized selector sent to instance 0x1372089c0
+        //     … → String._unconditionallyBridgeFromObjectiveC → 三条 EeveeSpotify.dylib 帧
+        //
+        // 也就是说这个方法收的**是一批 feature（数组）**，不是单个字符串。上一次写成
+        // `NSString` 时，Swift 会去做 `_unconditionallyBridgeFromObjectiveC`，
+        // 对 NSArray 问 `length` ⇒ 抛异常 ⇒ `abort()`，**播歌时闪退**。
+        //
+        // 所以这里一律：① 参数类型用 `Any`、**原样透传**给 `orig`；
+        // ② 只在日志里用 `String(describing:)` 描述它，绝不做强制桥接。
+        let payloadDescription = String(describing: payload)
 
         if Self.markFired() {
             writeDebugLog("[PrerelHook] hook fired — first call")
@@ -87,21 +102,22 @@ class PrereleaseNPVProviderRegistrationHook: ClassHook<NSObject> {
         let providerName = NSStringFromClass(type(of: target))
         let switchOn = NgzhwmSettingsViewModel.isNowPlayingPrereleaseProviderDisabled
 
-        if Self.shouldReport("\(featureName)|\(providerName)") {
+        if Self.shouldReport("\(payloadDescription)|\(providerName)") {
             writeDebugLog(
-                "[PrerelHook] register feature=\(featureName) provider=\(providerName)"
+                "[PrerelHook] register payload=\(payloadDescription) provider=\(providerName)"
                     + " — switch=\(switchOn ? "ON(decline)" : "off(pass)")"
             )
         }
 
         if switchOn {
             // ⚠️ 不调 `orig` —— 这一条注册被吞掉，provider 不会进入正在播放页那一排。
-            if Self.shouldReport("declined|\(featureName)") {
-                writeDebugLog("[PrerelHook] DECLINED registration (switch ON) feature=\(featureName)")
+            if Self.shouldReport("declined|\(payloadDescription)") {
+                writeDebugLog("[PrerelHook] DECLINED registration (switch ON) payload=\(payloadDescription)")
             }
             return
         }
 
-        orig.registerScrollProviderIn(feature)
+        // 原样透传（不做任何桥接/拆包）。
+        orig.registerScrollProviderIn(payload)
     }
 }

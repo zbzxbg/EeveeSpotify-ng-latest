@@ -497,6 +497,63 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 47. 崩溃事故：**参数类型写成 `NSString` ⇒ 播歌闪退**（2026-09-26 23:57，`Spotify-2026-09-26-235758.ips`）
+
+**材料**：`C:\dsh\readlog\Spotify-2026-09-26-235758.ips`。
+用户口径："开启日志记录后，播放歌曲闪退。"
+
+### 47.1 崩溃点就在 §46 那个钩子里
+
+```
+exception : EXC_CRASH / SIGABRT
+termination: Abort trap: 6
+asi        : libsystem_c.dylib: abort() called
+exceptionReason:
+  -[(dynamic class) length]: unrecognized selector sent to instance 0x1372089c0
+
+lastExceptionBacktrace:
+  __exceptionPreprocess → objc_exception_throw → ___forwarding___ → _CF_forwarding_prep_0
+  → static String._unconditionallyBridgeFromObjectiveC(_:)      ← ★ 在这里桥接
+  → imageIndex 3 ×3 帧                                          ← ★ EeveeSpotify.dylib
+  → imageIndex 0 ×N（Spotify 主二进制：UIViewController viewDidLoad …）
+```
+
+`usedImages[3]` = `…/Frameworks/EeveeSpotify.dylib`，`usedImages[0]` = 主二进制 ——
+**三条无符号帧全在我们的库里**，桥接就发生在那里。
+
+### 47.2 根因：`registerScrollProviderIn:` 收的**不是字符串，是一批 feature（数组）**
+
+§46.3 里把它写成
+
+```swift
+func registerScrollProviderIn(_ feature: NSString) {
+    let featureName = feature as String      // ← 这一行崩
+```
+
+Swift 对 `NSString` 形参会做 `_unconditionallyBridgeFromObjectiveC`；拿到的实际是
+`NSArray`，于是去问 `length` ⇒ `unrecognized selector` ⇒ `abort()`。
+**教训（写给以后所有 hook）**：方法名是从**类元数据**里读出来的，签名却不是 ——
+**参数类型未知时用 `Any` 原样透传，只在日志里 `String(describing:)`，绝不做强制桥接。**
+
+### 47.3 修法
+
+```swift
+func registerScrollProviderIn(_ payload: Any) {
+    let payloadDescription = String(describing: payload)   // 只描述，不桥接
+    …
+    orig.registerScrollProviderIn(payload)                 // 原样透传
+}
+```
+
+### 47.4 同批排查 / 未验证
+
+- `PrereleaseCardProbe` 里也有一处 `feature as String`？**没有** —— 那个探针只用
+  `NSClassFromString` + ObjC runtime（`class_copyMethodList` 等），不碰桥接，安全。
+- 本机的崩溃报告只有这一份，所以**只能确认这一个钩子**；其余新增代码未发现同类写法。
+- 照旧**没有编译验证**；修完需要真机再跑一次"播歌不闪退 + `[PrerelHook]` 出 `register` 行"。
+
+---
+
 ## 46. 日志 13：探针**当场抓到卡**；flag 判死；改成拦 `registerScrollProviderIn:`（2026-09-26）
 
 **材料**：`C:\dsh\readlog\eeveespotify_debug 13.log`（149,643B，13:55:32–13:57 前后，UTC）。
