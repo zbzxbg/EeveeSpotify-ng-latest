@@ -120,6 +120,7 @@ extension EeveeLyricsSettingsViewModel {
         // 有没有往 scroll 元素列表里补卡片元素"。
         logBooleanSetting($syntheticLineTiming, "synthetic line timing")
         logBooleanSetting($injectLyricsCardElement, "inject lyrics card element")
+        logBooleanSetting($lyricsEntryPointFlag, "lyrics entry point flag")
         logBooleanSetting($disableLyricsFeature, "disable lyrics feature")
         logBooleanSetting($removeMxmInterludeSymbol, "remove interlude symbol")
         logBooleanSetting($neteaseRomajiLocal, "NetEase romaji display mode")

@@ -433,6 +433,19 @@ private let propertyReplacements = [
     EeveePropertyReplacement(name: "lyrics_entry_point_enabled", scope: "ios-feature-lyrics", modification: .setBool(true))
 ]
 
+/// 上面那条 `lyrics_entry_point_enabled` 的 flag 名（开关判定用，避免再抄一遍字面量）。
+private let lyricsEntryPointFlagName = "lyrics_entry_point_enabled"
+
+/// 「歌词入口 flag 已按开关跳过」只打一次 —— `modifyAssignedValues` 每次 customize
+/// 响应都会跑，重复打只会刷屏。
+private var entryPointFlagSkippedReported = false
+
+private func reportEntryPointFlagSkippedOnce() {
+    guard !entryPointFlagSkippedReported else { return }
+    entryPointFlagSkippedReported = true
+    writeDebugLog("[Flags] lyrics_entry_point_enabled — SKIPPED (switch off, A/B)")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 歌词相关 flag 取证（只读、只打日志、不改任何字节）
 // ─────────────────────────────────────────────────────────────────────────────
@@ -535,7 +548,16 @@ private func reportLyricsReplacementOutcome(_ values: [AssignedValue]) {
 
         let key = "\(scope ?? "*").\(name)"
         guard reportedLyricsReplacements.insert(key).inserted else { continue }
-        writeDebugLog("[Flags] replacement \(key) — \(hits) match(es)")
+
+        // 关掉开关时 `hits` 照样是 1（服务端确实下发了这条），但**我们没改**。
+        // 不标出来，日志就会读成"改了"，判读 A/B 时会直接得出相反结论。
+        let skipped = name == lyricsEntryPointFlagName
+            && !NgzhwmSettingsViewModel.isLyricsEntryPointFlagForced
+
+        writeDebugLog(
+            "[Flags] replacement \(key) — \(hits) match(es)"
+                + (skipped ? " (SKIPPED: switch off)" : "")
+        )
     }
 }
 
@@ -544,6 +566,16 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
     dumpNPVFlags(values)
 
     for replacement in propertyReplacements {
+        // 「歌词入口」flag 是**唯一**还能影响正在播放页卡片渲染的我们自家改动
+        // —— 另外两条路（补卡片元素 / HTTP 数据）都已被真机 A/B 与九份日志排除。
+        // 关掉开关时整条替换跳过，并在启动时打一行，好让日志能区分
+        // "我们没改" 与 "改了但没命中"。
+        if replacement.name == lyricsEntryPointFlagName,
+           !NgzhwmSettingsViewModel.isLyricsEntryPointFlagForced {
+            reportEntryPointFlagSkippedOnce()
+            continue
+        }
+
         let matchingIndices = values.indices.filter({ index in
             let value = values[index]
             let nameMatches = replacement.name.map { value.propertyID.name == $0 } ?? true

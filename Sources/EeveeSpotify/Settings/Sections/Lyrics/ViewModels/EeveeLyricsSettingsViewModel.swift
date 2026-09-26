@@ -65,6 +65,21 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
         }
     }
 
+    /// 「把服务端那条 `lyrics_entry_point_enabled` 钉成 true」。
+    ///
+    /// ⚠️ 初值同样必须走默认值 getter（默认开），不能用 `UserDefaults.bool(forKey:)`。
+    ///
+    /// 这是排查「日期过期的『即将发布』卡」用的第二个 A/B 开关（第一个是
+    /// `injectLyricsCardElement`，真机关掉后假卡依旧 → 已排除）。
+    @Published var lyricsEntryPointFlag = NgzhwmSettingsViewModel.isLyricsEntryPointFlagForced {
+        didSet {
+            UserDefaults.standard.set(
+                lyricsEntryPointFlag,
+                forKey: NgzhwmSettingsViewModel.lyricsEntryPointFlagKey
+            )
+        }
+    }
+
     // 已移除一个开关（2026-09-25）：`hideOfficialLyrics` —— 它对应的行为已经在
     // `NgzhwmSettingsViewModel` 里**写死启用**（见那个 getter 的说明），
     // 设置页不再暴露、也不再写 UserDefaults。
@@ -144,6 +159,7 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
             wordByWordLyrics,
             syntheticLineTiming,
             injectLyricsCardElement,
+            lyricsEntryPointFlag,
             // ⚠️ `amllPreferred`（已删功能）与 `hideOfficialLyrics`（已写死启用）
             // 都不能再列在这里 —— 属性本身没了，列着就是编译错误。
             disableLyricsFeature,

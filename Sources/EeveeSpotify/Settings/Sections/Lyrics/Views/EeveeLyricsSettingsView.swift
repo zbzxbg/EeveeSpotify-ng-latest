@@ -41,6 +41,7 @@ struct EeveeLyricsSettingsView: View {
                 hideOnErrorSection()
                 syntheticLineTimingSection()
                 injectLyricsCardElementSection()
+                lyricsEntryPointFlagSection()
                 // 「隐藏官方歌词」已写死启用（见 `NgzhwmSettingsViewModel` 里那个
                 // getter），不再有开关。
                 romanizationSection()
@@ -170,6 +171,20 @@ struct EeveeLyricsSettingsView: View {
             Toggle(
                 "ngzhwm_inject_lyrics_card_element".localized,
                 isOn: $viewModel.injectLyricsCardElement
+            )
+        }
+    }
+
+    /// 「把服务端那条 `lyrics_entry_point_enabled` 钉成 true」。
+    ///
+    /// 这张卡的排查顺序是：先排除「补卡片元素」（真机关掉，假卡依旧），再排除
+    /// HTTP 数据（九份日志零命中）。剩下唯一还能让客户端多渲一张卡的就这条 flag，
+    /// 所以给它一个开关：**关掉 → 假卡也消失 = 是它；假卡还在 = Spotify 自己的问题。**
+    @ViewBuilder private func lyricsEntryPointFlagSection() -> some View {
+        Section {
+            Toggle(
+                "ngzhwm_lyrics_entry_point_flag".localized,
+                isOn: $viewModel.lyricsEntryPointFlag
             )
         }
     }

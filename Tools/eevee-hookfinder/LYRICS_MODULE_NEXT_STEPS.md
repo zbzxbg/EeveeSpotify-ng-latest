@@ -497,6 +497,91 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 39. 真机 A/B：**「补卡片元素」被排除**；剩下唯一嫌疑 `lyrics_entry_point_enabled` 已做成开关（2026-09-26）
+
+**用户原话**：「去试了一下，关闭补元素，合成开启，还是有这个问题」。
+
+这一句把 §34 里排第一的嫌疑**直接证伪**了 —— 关掉 `injectLyricsCardElement`
+之后，那张日期早已过期的「即将发布 / 已预收藏」卡**照样出现**。
+
+### 39.1 为什么这条排除是硬的（不是"好像没变化"）
+
+关掉开关后，`SpotifyResponsePatcher.shouldHandle` 里那半条
+`isLyricsCardElementInjectionEnabled && ScrollsitaLyricsElementInjector.shouldHandle(url)`
+为 false，`injectIfNeeded` 开头也有同一道 guard ⇒ **scrollsita 的字节一个都不动**。
+
+⚠️ 注意：scrollsita **仍然**会被 `BrowsitaSectionStripper.shouldHandle` 命中而进缓冲，
+但 `strip()` 在 `dropped == 0` 时返回 nil（§35 的 `[STRIP] KEEP` 日志已证实），
+所以最终交给客户端的仍是**服务端原样**。
+
+⇒ 在"响应与服务端逐字节相同"的前提下坏卡还在 ⇒ **坏卡不是我们写进元素列表的**。
+
+### 39.2 那次"修复预览歌词"到底改了什么（git 取证，避免再漏）
+
+`git log --follow` 追两个文件，改动集中在两个提交：
+
+| 提交 | 时间 | 内容 |
+|---|---|---|
+| `aa71b42` | 09-25 08:00 | **新建** `ScrollsitaLyricsElementInjector`（+192 行）；**新增** flag `lyrics_entry_point_enabled`（`ios-feature-lyrics`，`.setBool(true)`）；新建设置开关与 l10n |
+| `d8c96f6` | 09-25 10:56 | 注入器 +71 行；`DataLoaderServiceHooks` / `HttpClientURLSessionHooks` 各加两处 **`isLyricsFeatureDisabled` 分支**（只在"禁用歌词功能"时生效，与坏卡无关） |
+
+也就是说：**能动到正在播放页卡片渲染的我们自家改动只有两处**，
+一处已被本次 A/B 排除，只剩下面这条 flag。
+
+顺带排除的一个猜想：担心 `propertyReplacements` 里有"name 为 nil 的通配 `setBool`"
+会把 prerelease 类 flag 一并钉成 true —— 查过了，**所有无 `name:` 的条目全是 `.remove`**，
+不存在通配 `setBool`。
+
+### 39.3 剩下的嫌疑：`lyrics_entry_point_enabled`
+
+服务端对 `ios-feature-lyrics` 下发的整份歌词 flag 里**只有这一条是 false**（§7 取证），
+我们把它钉成 true。
+
+新的怀疑点不是"歌词入口"这四个字的字面意思，而是 **entry point 在正在播放页是一整排**：
+歌词入口、预热/预收藏入口、周边入口、演出入口…… 服务端把这个入口区关掉了，
+我们把它打开之后，客户端就拿**本地实体缓存**去填这一排 —— 缓存里那张专辑还带着
+2021 / 2023 年的 prerelease 记录，于是渲出一张"日期早已过期"的卡。
+
+这也能解释用户描述的两个现象：
+- **间歇出现** —— 取决于本地实体缓存里那条 prerelease 记录在与不在；
+- **退出重进就没了** —— 重进时 scrollsita 与实体都重新取，缓存被冲掉。
+
+### 39.4 新开关（默认 ON，保持既有行为不变）
+
+| 层 | 改动 |
+|---|---|
+| key | `NgzhwmSettingsViewModel.lyricsEntryPointFlagKey = "ngzhwm_lyricsEntryPointFlag"` |
+| getter | `isLyricsEntryPointFlagForced`（`bool(forKey:defaultValue: true)`） |
+| 生效点 | `modifyAssignedValues` 的 `for replacement in propertyReplacements` 循环开头：命中该 flag 名且开关关闭 → `continue`（整条替换跳过，不打钉） |
+| 视图 | `EeveeLyricsSettingsView.lyricsEntryPointFlagSection()`，紧跟 `injectLyricsCardElementSection()` |
+| l10n | `ngzhwm_lyrics_entry_point_flag`（en: "Force Lyrics Entry Point Flag" / zh-CN: "强制歌词入口开关"） |
+
+**日志怎么读**（`[Flags]` 两行配合看）：
+
+```
+[Flags] replacement ios-feature-lyrics.lyrics_entry_point_enabled — 1 match(es)            ← 开关 ON，已钉
+[Flags] replacement ios-feature-lyrics.lyrics_entry_point_enabled — 1 match(es) (SKIPPED: switch off)   ← 开关 OFF，没动
+[Flags] lyrics_entry_point_enabled — SKIPPED (switch off, A/B)                              ← 启动时打一次
+```
+
+⚠️ 命中数是**照常打印**的（服务端确实下发了这条），所以必须看 `(SKIPPED: switch off)`
+后缀才能区分"改了"与"没改" —— 这条后缀是专门为了防误读加的。
+
+### 39.5 下一步 A/B（用户操作）
+
+1. 设置 → 歌词 → **关掉**「强制歌词入口开关」，「补全歌词时间轴」保持开启，
+   「给没有歌词卡片的歌曲补一张」随便（已排除）；
+2. 复现：找一首会出坏卡的歌（KSLV Noh 那几首：`Dog Eats Dog` / `Final Stage` /
+   `Live, Love, Lacerate - Live`），进正在播放页，退出重进几轮；
+3. **判读**：
+   - 坏卡**消失** ⇒ 就是这条 flag。修法是把"钉 true"收窄（例如只在真的拿到自定义歌词时才钉），
+     而不是整段删掉 —— 删了会让 9.1.86 上的歌词卡片一起没掉；
+   - 坏卡**还在** ⇒ 与我们无关，是 Spotify 自己拿过期的专辑 prerelease 记录渲的。
+     此时应停止在注入/flag 上找，转为**只能绕开**：把元素类型 `12` 也纳入可剥离范围，
+     或者干脆不管。
+
+---
+
 ## 38. 预热卡：78 条 manifest 全解 + 关键字零命中 ⇒ 数据不在我们能看到的网络里，加「全量请求清单 + 日期串」探针（2026-09-26，日志 8 + 照片 8/9）
 
 **材料**：`C:\dsh\readlog\eeveespotify_debug 8.log`（537KB，06:22:52–06:33:14 UTC = 本地 15:22–15:33）、
