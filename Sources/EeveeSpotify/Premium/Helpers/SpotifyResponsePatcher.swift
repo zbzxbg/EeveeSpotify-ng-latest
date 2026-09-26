@@ -247,6 +247,88 @@ enum SpotifyResponsePatcher {
         )
     }
 
+    // MARK: 正在播放页的「旁路模块」接口
+
+    /// 除 `scrollsita` 的元素列表之外，正在播放页还会**单独请求**几个"模块"接口。
+    ///
+    /// 起因（2026-09-26 真机，日志 5 的 `Fade Away`）：用户看到的那张**过期**的
+    /// 「即将发布 / 已预收藏」卡，**不来自元素列表** —— 那份响应只有 `2/3/4`（没有 `12`），
+    /// 而下面这三个请求**恰好在"卡在场"的那一次出现、"卡消失"的重进那一次全都没有**：
+    ///
+    ///   · `/cultural-moments-entrypoints/v1/entrypoint?entityUri=…`  ← 按时间点出卡，最像
+    ///   · `/spotify.liveeventdistribution.v1.EventCardInfoService/EventCardInfo`
+    ///   · `/merch-npv-service/v1/merch/track/<id>`
+    ///
+    /// 对照组（日志 6 `MONTAGEM KOKORO`）：那张**正常**的预热卡（"在 6 天内发布" +
+    /// "预收藏 +"）来自元素列表里的类型 `12`，而那一整段**没有任何旁路请求**。
+    /// 另外把 `12` 那个元素拆开看，它里面只有 album URI + section URI，**没有日期字段** ——
+    /// 所以日期与"已收藏"状态都是客户端从别处取来的，元素列表这条路解释不了坏卡。
+    ///
+    /// 本探针只做一件事：把这三个接口的响应原样亮出来（状态 + 可打印串 + hex）。
+    /// **只读、只打日志、不修改任何字节**，也不参与 `shouldModify`。
+    static func isNPVModuleEndpoint(_ url: URL) -> Bool {
+        let path = url.path.lowercased()
+        return path.contains("/cultural-moments-entrypoints/")
+            || path.contains("eventcardinfoservice")
+            || path.contains("/merch-npv-service/")
+    }
+
+    private static var _moduleProbeBody: [Int: Data] = [:]
+    private static var _moduleProbeDumps: [String: Int] = [:]
+    private static var _moduleProbeStatus: [String: Int] = [:]
+
+    /// 由 `didReceiveResponse` 调用：记下状态码与 Content-Type（同一 path 只报一次）。
+    static func probeNPVModuleHeaders(url: URL, response: HTTPURLResponse) {
+        guard isNPVModuleEndpoint(url) else { return }
+
+        lock.lock()
+        let isNew = _moduleProbeStatus[url.path] == nil
+        _moduleProbeStatus[url.path] = response.statusCode
+        lock.unlock()
+
+        guard isNew else { return }
+        let type = response.value(forHTTPHeaderField: "Content-Type") ?? "-"
+        let length = response.value(forHTTPHeaderField: "Content-Length") ?? "-"
+        writeDebugLog(
+            "[NPVModule] status=\(response.statusCode) len=\(length) type=\(type) path=\(url.path)"
+        )
+    }
+
+    /// 由 `didReceiveData` 调用：累积整条响应体，**体积变大时最多 dump 3 次**。
+    ///
+    /// 为什么累积而不是只看第一块：这几个接口的体可能是分块到达的，
+    /// 而"过期日期 / 错误状态"这种字符串完全可能跨块（日志 10 的 `has_lyrics` 探针就栽在这上面）。
+    static func probeNPVModuleBody(url: URL, taskID: Int, data: Data) {
+        guard isNPVModuleEndpoint(url), !data.isEmpty else { return }
+
+        lock.lock()
+        var body = _moduleProbeBody[taskID] ?? Data()
+        body.append(data)
+        if body.count > 256 * 1024 { body = Data(body.suffix(256 * 1024)) }
+        _moduleProbeBody[taskID] = body
+        if _moduleProbeBody.count > 64 { _moduleProbeBody.removeAll() }
+
+        let dumps = _moduleProbeDumps[url.path] ?? 0
+        var printable: [String] = []
+        var hexDump: String?
+        if dumps < 3 {
+            _moduleProbeDumps[url.path] = dumps + 1
+            printable = printableRuns(body, limit: 30)
+            hexDump = body.prefix(256).map { String(format: "%02x", $0) }.joined()
+        }
+        let size = body.count
+        lock.unlock()
+
+        guard dumps < 3 else { return }
+        writeDebugLog(
+            "[NPVModule] body path=\(url.path) \(size)B"
+                + " printable=\(printable.joined(separator: " | "))"
+        )
+        if let hexDump {
+            writeDebugLog("[NPVModule] hex path=\(url.path) \(hexDump.count / 2)B=\(hexDump)")
+        }
+    }
+
     // MARK: - 「禁用歌词功能」
 
     /// 「禁用歌词功能」是否生效。

@@ -185,6 +185,8 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         // 见 `SpotifyResponsePatcher.probeLyricsResponseHeaders` 的说明。
         if let probeURL = task.currentRequest?.url {
             SpotifyResponsePatcher.probeLyricsResponseHeaders(url: probeURL, response: response)
+            // 正在播放页的「旁路模块」（预热卡嫌疑来源）：状态 + Content-Type。
+            SpotifyResponsePatcher.probeNPVModuleHeaders(url: probeURL, response: response)
         }
 
         // Lyrics 4xx/5xx — replace with our custom fetch result so the
@@ -249,6 +251,8 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         if SpotifyResponsePatcher.shouldBlock(url) { return }
         // 排障：扫一下这块数据里有没有 `has_lyrics`，定位它的线上来源（只读、不改字节）。
         SpotifyResponsePatcher.probeHasLyricsKey(url: url, taskID: task.taskIdentifier, data: data)
+        // 排障：正在播放页的「旁路模块」响应体（预热卡的嫌疑来源）。只读、不改字节。
+        SpotifyResponsePatcher.probeNPVModuleBody(url: url, taskID: task.taskIdentifier, data: data)
         if CasitaResponseProbe.shouldProbe(url) {
             CasitaResponseProbe.append(data, for: task)
         }

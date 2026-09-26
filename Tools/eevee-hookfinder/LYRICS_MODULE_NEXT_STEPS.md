@@ -497,6 +497,100 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 36. 预热卡：元素 `12` 是**正版**，坏卡来自旁路模块（2026-09-26，日志 6 + 照片 5/7）
+
+**材料**：`eeveespotify_debug 6.log`、`C:\dsh\else\6.jpg`、`5.jpg`、`7.jpg`。
+
+### 36.1 结论：两类"预热卡"，来源不同
+
+| | 照片 7（**正版**，MONTAGEM FUJIN） | 照片 5（**坏卡**，Notes of Color） |
+|---|---|---|
+| 日期 | **在 6 天内发布**（相对） | **发布时间：2026年5月30日**（绝对、早已过期） |
+| 按钮 | **预收藏 (+)** —— 未收藏，状态正确 | **已预收藏 ✓** —— 实际没收藏，**状态错误** |
+
+**日志 6 的铁证**（04:32:45，`MONTAGEM KOKORO - Dj Samir`，`6k2NwBLWvFhoNg8etP9EMo`）：
+
+```
+[Scrollsita] manifest … body=498B has5=false
+  elements=[ 2{artist:6U0dJxYVB41L8WDZ02Nwuk,…6cGq1L}
+             12{spotify:album:08mBBhkBwUP9MC4C1fjnRe,…6cGq1X}    ← ★
+             3{…1XJEwt}  4{track,artist,artist} ]
+[Scrollsita] injected lyrics-card element — 498B -> 583B
+```
+
+注入后元素列表 = **`5, 2, 12, 3, 4` 共 5 个**；而用户当时数到的模块 = **制作人 / 探索艺人 /
+预热卡 / 艺人卡 / 预览歌词卡 共 5 个**，一一对应（`5`=预览歌词卡、`2`=艺人卡、
+**`12`=预热卡**、`3`=探索艺人、`4`=制作人）。用户明确说这一张是**"真正的预热卡"**。
+
+⇒ **元素类型 `12` = 正确的「即将发布」卡（引用 album URI + section `…6cGq1X`），不能摘。**
+同族对照：日志 3 的 `天気雨` 有 `11`（引用 `spotify:concert:…` + section `…6cGq1W`）＝ 演出卡；
+类型号与 section 后缀成对递增。
+
+**坏卡不是它** —— 坏卡出现在**元素列表里没有 `12`** 的曲目上：
+
+| 曲目 | 有 `12` 吗 | 那张卡 |
+|---|---|---|
+| MONTAGEM KOKORO（日志 6） | **有** | 正版 |
+| Fade Away（日志 5） | 没有（只有 2/3/4） | 坏卡 |
+| Notes of Color（日志 3，照片 5） | 没有（只有 5/2/3/4） | 坏卡 |
+
+**原理性证据**：把 `12` 那个元素拆开，里面**只有 album URI + section URI**（`62 26 0a 24 …`），
+**没有任何日期字段** —— 所以日期与"已预收藏"状态都不是元素带来的，是客户端另取的。
+"从元素列表里摘掉它"这条路在原理上就不成立。
+
+### 36.2 坏卡来自三个"旁路模块"接口（请求级对照）
+
+日志 5 的 `Fade Away`（04:20:15–04:20:40）：
+
+```
+04:20:17  scrollsita（2/3/4，无 12）→ 注入 5
+04:20:18  …/spotify.liveeventdistribution.v1.EventCardInfoService/EventCardInfo
+04:20:19  …/cultural-moments-entrypoints/v1/entrypoint?entityUri=spotify:track:3o0CI…
+04:20:19  …/merch-npv-service/v1/merch/track/3o0CI…
+          ⇒ 用户看到：预览歌词卡 + 坏卡
+04:20:40  退出重进：**只**重新请求 scrollsita，上面三个全都没有 ⇒ 坏卡消失
+```
+
+对照组：日志 6 的 `MONTAGEM KOKORO` 那一整段（04:32:39–04:33:30）**一个旁路请求都没有**，
+显示的是元素 `12` 带来的正版卡。
+
+⇒ **坏卡 = 三个旁路模块之一**。最像的是 `cultural-moments-entrypoints`（它的框架就是"按时间点出卡"，
+pre-release 正是其一类，且 `entityUri` 就是当前曲目）；`EventCardInfoService` 是演出、
+`merch-npv-service` 是周边，长相都不该是"即将发布 + 预收藏"。
+
+### 36.3 本轮改动：加 NPV 旁路模块探针
+
+| 文件 | 改动 |
+|---|---|
+| `Premium/Helpers/SpotifyResponsePatcher.swift` | 新增 `isNPVModuleEndpoint(_:)` / `probeNPVModuleHeaders(url:response:)` / `probeNPVModuleBody(url:taskID:data:)`。按上述三个 path 匹配；状态 + Content-Type 同 path 只报一次；响应体**按 task 累积**（≤256KB，体积变大时最多 dump 3 次），打可打印串（≤30 条）+ 前 256B hex |
+| `HttpClientURLSessionHooks.x.swift` | `didReceiveResponse` 加 `probeNPVModuleHeaders`；`didReceiveData` 加 `probeNPVModuleBody` |
+| `DataLoaderServiceHooks.x.swift` | 同上（两个钩子都要，两条 HTTP 栈都可能在跑） |
+
+**为什么累积而不是只看第一块**：这几个接口的体可能分块到达，"过期日期 / 错误状态"这种字符串
+完全可能跨块（日志 10 的 `has_lyrics` 探针就栽在这上面）。探针**只读、不改字节**，
+也不参与 `shouldModify`。
+
+### 36.4 下一步判读
+
+复现一次（让坏卡出现），然后看：
+
+1. 三个 path 里**哪个的 `[NPVModule] body … printable=` 里出现"即将发布 / 预发行 / 那个过去的日期 /
+   预收藏"字样** → 就是它；
+2. 找到之后两条修法：**按日期过滤**（发行日已过就不展示，最贴近用户诉求，前提是日期能从体里解析出来）
+   或**整条挡掉那个 moment**（代价是这类卡全没，包括合法的周年卡之类）；
+3. 照片 5 vs 7 的差别（**绝对日期 vs "在 N 天内"**）很可能就是"已过期 vs 未到期"的渲染分界 ——
+   若成立，则坏卡的本质是**服务端仍在推过期的 pre-release 数据**，修法 1 即正解。
+
+### 36.5 ⚠️ 未验证
+
+本机没有 Swift 工具链，且 pwsh 执行器**本轮再次全程** `0xC0000142`（连 `'probe'` 都是这个码），
+**没有编译验证**，`git diff` 与 l10n linter 都跑不了。改动人工逐处复核：新函数只用同文件的
+`private static` 成员（`lock` / `printableRuns`），四处调用点分别在两个钩子的
+`didReceiveResponse` / `didReceiveData` 作用域内（`probeURL` / `url` + `task` 均在作用域）。
+本轮**没有新增 l10n 键**。
+
+---
+
 ## 35. 三条诊断日志：每条 scrollsita 的元素清单 / 开关状态 / stripper 的 KEEP-DROP（2026-09-26）
 
 **起因**：用户实测"预热卡一会有一会没有"，而且**第一次进听歌页和退出重进拿到的模块不一样**
