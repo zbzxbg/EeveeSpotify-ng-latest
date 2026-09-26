@@ -497,6 +497,145 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 41. 抓卡片的最后一条路：**UI 文字 dump**（2026-09-26）
+
+### 41.1 为什么必须走到这一步
+
+用户问"日志里从来没记录过那张卡的日期吗" —— 答案是**没有，一条都没有**。
+把十份日志全量过了一遍：
+
+| 手段 | 结果 |
+|---|---|
+| `[Traffic] date=` 全响应字节扫描 | **全局只命中 2 条**，都是 `2026-02-05`（账号创建时间，在 `bootstrap` / `customize` 的 `account-creation-time` 字段里） |
+| `[PreRelease]` 11 关键字扫描 | 42 处 `prerelease` / 16 处 `presave` / 8 处 `release_date` —— **全是 flag 名字**（`ios-prerelease-feature`、`album_presave_second_step_enabled`、`inline_release_date_enabled`、`top_presaved_prereleases_highlight` …），外加 `spotify:upcoming-releases`（页面 URI）和一条 `album_states=prerelease,live` 查询参数 |
+| 请求清单 | **不存在** album / entity / metadata 接口 |
+
+⇒ 日期既不在网络里，也没被任何探针记下来。
+
+### 41.2 已有的 `[ShellDump]` 为什么抓不到
+
+`AppleMusicLyricsPlaybackControl.dumpControlCandidates()` 能看到卡片控件 ——
+日志 2 里就抓到过 `label="取消保存" id="Components.UI.PrereleaseButtonPreSave"`
+（预热卡的**预收藏按钮**）。但它的遍历起点是 `UIControl`、只要"可点控件"：
+**日期文字是个 `UILabel.text`，既不是按钮、也没有 `accessibilityLabel`，天然被排除。**
+
+而且它只在日志 2 / 日志 8 跑过，日志 2 那次在播 `MIMI / SECRET`，**不是**坏卡曲目。
+
+### 41.3 新探针：`[ShellText]`
+
+`WordByWordPlaybackControl.dumpVisibleTexts()`（`AppleMusicLyricsPlaybackControl.swift`）
+
+- **换遍历起点**：遍历**所有 `UIView` 子类**，取 `UILabel.text` / `UIButton.title` /
+  `accessibilityLabel`；
+- **分级输出**（避免刷屏）：
+  - `[ShellText] DATE` —— 含**四位连排数字**或 `年/月/日` 的文字。**不管在不在屏幕内一律打**；
+  - `[ShellText] card` —— 在屏幕内且 ≥4 字符的其它文案；
+  - 屏幕外的行标 `OFFSCREEN`（卡片刚被移出还没释放，正是"重进就消失"那一刻）。
+- **两个调用点**（`LyricsWordByWord.x.swift`）：
+  1. AM 渲染分支挂载成功后（与 `dumpPreviewActionCandidates` 同处）；
+  2. **`guard usable` 失败、交还原生之前** —— ⚠️ 这一处是必需的：
+     坏卡曲目（KSLV Noh 那批 404）拿不到逐词数据，走不到第 1 个点，
+     只挂在那里等于"最想看的那一页什么都看不到"。
+
+### 41.4 怎么用
+
+装新版 → 复现 `Biohazard` → 在正在播放页**停留几秒**（dump 在挂载时刻跑一次）→
+日志里找：
+
+```
+[ShellText] ---- visible texts (N) ----
+[ShellText] [DATE] <视图类名> text="..." frame=(x,y w x h)
+[ShellText] [card] ...
+[ShellText] ---- end ----
+```
+
+拿到**真实字符串**（比如"2021年5月27日"或"在 6 天内发布"的本地化文案）之后，
+就能反查它是哪个视图类 / 哪份本地数据喂进去的 —— 这是唯一还没试过的手段。
+
+---
+
+## 40. 日志 10：坏卡曲目 = `Biohazard`；**正版卡与坏卡是两回事**（2026-09-26，日志 10 + 照片 11）
+
+**材料**：`C:\dsh\readlog\eeveespotify_debug 10.log`（177KB，09:51:05–09:53:10 UTC = 本地 17:51–17:53）、
+`C:\dsh\else\11.jpg`（17:54，本模型读不了图）。
+
+⚠️ **用户纠正**：`Detour`（ZWE1HVNDXR）那张是**正常**的预热卡；真正出错的是 `Biohazard`。
+日志里确实有 `"Biohazard" - KSLV Noh (id 6d9QrWBqoH6t4VyuvlvcOm)` ——
+**正是那个发旁路请求的曲目**。下面按这个纠正重排。
+
+### 40.1 两首歌的对照（同一份日志里现成的 A/B）
+
+| | `Detour`（**正常**） | `Biohazard`（**错误**） |
+|---|---|---|
+| id | `49fLfatdFL1wJ0d9dKElTK` | `6d9QrWBqoH6t4VyuvlvcOm` |
+| manifest | `[2, 12, 3, 4]` —— **有 `12`** | `[2, 3, 4]` —— **无 `12`、无 `5`** |
+| 三个旁路请求 | **一条都没发** | **全发了**（merch 404 / cultural-moments 404 / EventCard 503） |
+| 卡的来源 | 服务端 `12` 明确下发 | 服务端没给，客户端自己去找 |
+
+`12` 只引用 `spotify:album:1JITwPDZUpf7XUltkfWYJI` + section `…6cGq1X`，
+与 §36 在正版卡（`MONTAGEM KOKORO`）上确认过的 `12` 同形，元素里没有日期字段。
+
+⇒ **两种卡，两种成因**：
+- **正版**：元素列表里有 `12`，服务端明确要求渲卡，不需要旁路请求；
+- **坏卡**：元素列表里**没有** `12`，客户端**自己**去三个"入口"接口找卡。
+
+### 40.2 "退出重进就没了"的机制 —— 找到了
+
+`Biohazard` 在同一份日志里加载了**两次**，间隔 26 秒，HTTP 数据**逐字节相同**（都是 333B、`[2,3,4]`）：
+
+- `09:52:08` 第一次 → **发三个旁路请求** → 坏卡出现
+- `09:52:34` 第二次 → **一条旁路都没发** → 卡没了
+
+⇒ 差别不在服务端数据（两次完全一样），而在**客户端这一次要不要去找卡**。
+这也再次坐实"日期/预收藏状态 100% 在客户端本地"。
+
+### 40.3 撤回上一版的两条判断（写错过，留着以免再犯）
+
+- ~~`Detour` 是坏卡曲目~~ —— **错**。它是正版卡：有 `12`、没发旁路（用户纠正，日志也印证）。
+- ~~§38"旁路请求只在卡在场时出现"方向反了~~ —— **错**，§38 **是对的**。
+  上一版拿 `Detour`（有 `12`、不发旁路）去反推，方向搞反了：
+  正版卡由 `12` 直接给，不需要旁路；**没有 `12` 却渲卡**才需要客户端去旁路找。
+
+### 40.4 剥 `12` 的方案：**做出来了，又删掉了**（没有价值）
+
+一度加过一个"剥掉元素 `12`"的开关（`ngzhwm_hidePreReleaseCard`，挂在 customization 页）。
+用户问"会不会误伤正常预热卡" —— 会，而且**方向是反的**：
+
+- `12` 正是**正版**预热卡（`Detour` / `MONTAGEM KOKORO`）的载体；
+- `Biohazard` 的坏卡**根本没有 `12`** ⇒ 剥 `12` **只杀正常的、杀不掉坏的**。
+
+**能不能只剥"日期已过期"的 `12`？不能。**
+`12` 元素里只有 `spotify:album:` + section URI，**没有任何日期字段**（§36 拆开验证过）；
+日志里**不存在**任何 album / entity / metadata 查询接口，响应层拿不到专辑发行日期，
+无从判断是否过期 ⇒ 要么全剥，要么不剥，没有中间态。
+
+⇒ 一个"关掉正常功能、却治不好 bug"的开关没有存在价值，**已连同 l10n、视图、
+`shouldModify` 放行、`PatchTag` 分支一并删除**（用户拍板："感觉这玩意没什么用"）。
+
+⚠️ 删的时候踩了个坑：那条剥离**不能直接 `return`** —— 同一条响应上还有"补 `5`"那一步，
+提前返回会把注入吞掉（`Detour` 正好"有 `12`、无 `5`"，必踩）。当时用 `workingBuffer` 串起来
++ 挪到注入之后 return 才修好。这个坑留着当教训：**同一条响应上的多个改写步骤要串行叠加，
+不能各自 return。**
+
+### 40.5 首要嫌疑回到 `lyrics_entry_point_enabled`
+
+`Biohazard` 的行为链条：元素列表没有卡 → 客户端**主动**去三个"入口"接口找卡 →
+全失败 → 回退到本地缓存 → 渲出一张日期过期的卡。
+
+"要不要启用这一整排入口"正是 `lyrics_entry_point_enabled` 的字面语义，
+而服务端**默认下发 false**（§7 取证）。⇒ 关掉它是最该先做的实验。
+
+### 40.6 判读不再靠肉眼 —— 看日志里有没有 `[NPVModule]`
+
+复现 `Biohazard` 时：
+
+- 关掉 flag 后 `[NPVModule]` 三行**消失** ⇒ 铁证，就是它；
+- `[NPVModule]` **还在** ⇒ 与我们无关，是 Spotify 自己的行为。
+
+比盯着屏幕看"卡有没有出现"可靠得多 —— **卡是间歇的，旁路请求是确定的**。
+
+---
+
 ## 39. 真机 A/B：**「补卡片元素」被排除**；剩下唯一嫌疑 `lyrics_entry_point_enabled` 已做成开关（2026-09-26）
 
 **用户原话**：「去试了一下，关闭补元素，合成开启，还是有这个问题」。

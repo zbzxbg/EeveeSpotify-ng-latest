@@ -1970,6 +1970,13 @@ final class WordByWordHost {
             if !showsProviderFooter {
                 WordByWordPlaybackControl.dumpPreviewActionCandidates()
             }
+            // 预览（非全屏）时把这一刻页面上**所有可见文字**打一份 —— 专抓那张
+            // 「即将发布 / 预收藏」卡上的文案与日期。`[ShellText] DATE` 就是我们要找的硬证据：
+            // 十份日志里从没记下过卡上的字，而它不在任何 HTTP 响应里。
+            // 放在预览分支是刻意的：卡就出现在这个面（面 A/B 之间那一排模块）。
+            if !showsProviderFooter {
+                WordByWordPlaybackControl.dumpVisibleTexts()
+            }
             // 新层由主时钟驱动，旧 overlay 的回调必须清掉，否则两边同时渲染。
             WordByWordPlaybackClock.shared.onChange = nil
             WordByWordPlaybackClock.shared.tickHandler = { @MainActor ms in
@@ -2016,6 +2023,14 @@ final class WordByWordHost {
             exitReason = "no word-level timing — handing the page back to Spotify's native"
                 + " renderer (line-level usable=\(lineLevelUsable));"
                 + " see the `[WordByWord] word-level judge` line above"
+            // 交还原生之前也 dump 一次页面文字。
+            //
+            // ⚠️ 这一处是**必需的**，不是重复：坏卡那几首歌（KSLV Noh 的 404 曲目）
+            // 拿不到逐词数据 → 走不到上面 AM 分支的那个 dump 点 → 如果只挂在那里，
+            // 我们恰恰会在"最想看的那一页"上什么都看不到。
+            if !showsProviderFooter {
+                WordByWordPlaybackControl.dumpVisibleTexts()
+            }
             return false
         }
 

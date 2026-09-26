@@ -303,9 +303,6 @@ enum ScrollsitaLyricsElementInjector {
         return Data(result)
     }
 
-    // MARK: - wire format 小工具（只为这个文件服务）
-
-    /// 歌词卡片元素的内层字段号（来自上面那张对照表）。
     private static let lyricsElementFieldNumber = 5
 
     /// 列出这份元素列表里每个元素的内层字段号。

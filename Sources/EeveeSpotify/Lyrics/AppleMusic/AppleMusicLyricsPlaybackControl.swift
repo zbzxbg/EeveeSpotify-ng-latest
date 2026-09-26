@@ -591,6 +591,109 @@ enum WordByWordPlaybackControl {
             .flatMap(\.windows)
             .first { $0.isKeyWindow }
     }
+
+    // MARK: - 预热卡文案 dump（2026-09-26 新增）
+
+    /// 把正在播放页里**所有可见的文字**（不限 `UIControl`）连视图类名和位置打进日志。
+    ///
+    /// ── 为什么需要它 ────────────────────────────────────────────────────────
+    ///
+    /// 排查那张**日期早已过期**的「即将发布 / 预收藏」卡：十份日志里**没有任何一条**
+    /// 记下过卡上的文案。已知的全部手段都够不着它：
+    ///   · `[Traffic] date=` 全响应扫描 —— 全局只命中过 `2026-02-05`（账号创建时间）；
+    ///   · `[PreRelease]` 关键字扫描 —— 42 处命中**全是 flag 名字**，无业务数据；
+    ///   · 请求清单里**不存在** album / entity / metadata 接口 ⇒ 日期不在网络上。
+    ///
+    /// 上面那个 `dumpControlCandidates()` 抓不到它，因为它的遍历起点是 `UIControl`
+    /// 且只要"可点控件"—— 卡片的**日期文字**是个 `UILabel` 的 `text` 属性，
+    /// 既不是按钮、也没有 `accessibilityLabel`，天然被排除在外。
+    ///
+    /// 所以这里换起点：**遍历所有 `UIView` 子类**，凡是 `UILabel` / `UIButton` /
+    /// 带 `accessibilityLabel` 的，都把文字原样打出来。
+    ///
+    /// ── 输出分级（避免刷屏）──────────────────────────────────────────────
+    ///
+    /// · `[ShellText] DATE` —— 文字里含**四位年份**或 `年/月/日`。这是我们要找的东西，
+    ///   不管它是什么视图、在不在屏幕内，**一律打**；
+    /// · `[ShellText] card` —— 位置落在"正在播放页正文区"、且文字够长（≥4 字符）的其它文案；
+    /// · 其余（短标签、屏幕外的）不打。
+    ///
+    /// 只读、只打日志、不改任何视图。`writeDebugLog` 自己受"开启日志记录"开关控制。
+    static func dumpVisibleTexts() {
+        guard let window = keyWindow else { return }
+
+        var lines: [String] = []
+        collectTexts(in: window, window: window, into: &lines)
+
+        guard !lines.isEmpty else { return }
+        writeDebugLog(
+            "[ShellText] ---- visible texts (\(lines.count)) ----"
+        )
+        for line in lines.prefix(120) {
+            writeDebugLog("[ShellText] \(line)")
+        }
+        writeDebugLog("[ShellText] ---- end ----")
+    }
+
+    /// 文字里是否含"看起来像日期"的东西。
+    ///
+    /// 判据刻意放宽：**四位数字连排**（`2021` / `2023`，年份）或中文 `年月日`。
+    /// 宁可多打几条，也别再漏一次 —— 这张卡的日期是我们唯一没抓到的硬证据。
+    private static func looksLikeDate(_ text: String) -> Bool {
+        if text.contains("年") || text.contains("月") || text.contains("日") {
+            return true
+        }
+        var run = 0
+        for scalar in text.unicodeScalars {
+            if scalar.value >= 0x30, scalar.value <= 0x39 {
+                run += 1
+                if run >= 4 { return true }
+            } else {
+                run = 0
+            }
+        }
+        return false
+    }
+
+    private static func collectTexts(
+        in view: UIView,
+        window: UIWindow,
+        into result: inout [String]
+    ) {
+        guard !isOwnControl(view) else { return }
+
+        let text: String? = {
+            if let label = view as? UILabel, let t = label.text, !t.isEmpty { return t }
+            if let button = view as? UIButton {
+                let t = button.title(for: .normal) ?? ""
+                if !t.isEmpty { return t }
+            }
+            if let t = view.accessibilityLabel, !t.isEmpty { return t }
+            return nil
+        }()
+
+        if let text, text.count >= 2 {
+            let frame = view.convert(view.bounds, to: window)
+            let onScreen = isOnScreen(view)
+            let dateish = looksLikeDate(text)
+
+            // 屏幕外的也打 —— 卡片可能刚被移出还没释放，恰是"重进就消失"的那一刻。
+            if dateish || (onScreen && text.count >= 4) {
+                let tag = dateish ? "DATE" : "card"
+                result.append(
+                    "[\(tag)] \(kind(view))"
+                        + " text=\"\(text)\""
+                        + " frame=(\(Int(frame.minX)),\(Int(frame.minY))"
+                        + " \(Int(frame.width))x\(Int(frame.height)))"
+                        + (onScreen ? "" : " OFFSCREEN")
+                )
+            }
+        }
+
+        for subview in view.subviews {
+            collectTexts(in: subview, window: window, into: &result)
+        }
+    }
 }
 
 // MARK: - 播放状态投影
