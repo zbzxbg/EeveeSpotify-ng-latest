@@ -39,8 +39,9 @@ struct EeveeLyricsSettingsView: View {
                 }
                 
                 hideOnErrorSection()
-                // 「隐藏官方歌词」「补时间轴」「补卡片元素」三项已写死启用（见
-                // `NgzhwmSettingsViewModel` 里那三个 getter），不再有开关。
+                syntheticLineTimingSection()
+                // 「隐藏官方歌词」「补卡片元素」两项已写死启用（见
+                // `NgzhwmSettingsViewModel` 里那两个 getter），不再有开关。
                 romanizationSection()
                 
                 // 多级回退链路包含 Musixmatch，其语言项同样可配置。
@@ -146,10 +147,23 @@ struct EeveeLyricsSettingsView: View {
         }
     }
 
-    // 已移除三个 Section（2026-09-25）：`hideOfficialLyricsSection()` /
-    // `syntheticLineTimingSection()` / `injectLyricsCardElementSection()` ——
-    // 它们的开关价值只在"验证修复有没有用"那一步，验证完就写死启用了。
-    // 那几个 l10n 键也一并删除（见 en/zh-CN 的 Localizable.strings）。
+    /// 「给无时间轴的歌词补时间轴」。
+    ///
+    /// 故意**没有 footer**：这个开关的用途是排查"不补时间轴会怎样"，
+    /// 不需要一段解释文字（与页面上其它开关不同，它们都有 `_description`）。
+    @ViewBuilder private func syntheticLineTimingSection() -> some View {
+        Section {
+            Toggle(
+                "ngzhwm_synthetic_line_timing".localized,
+                isOn: $viewModel.syntheticLineTiming
+            )
+        }
+    }
+
+    // 已移除两个 Section（2026-09-25）：`hideOfficialLyricsSection()` /
+    // `injectLyricsCardElementSection()` —— 它们的开关价值只在"验证修复有没有用"那一步，
+    // 验证完就写死启用了。那两个 l10n 键也一并删除（见 en/zh-CN 的 Localizable.strings）。
+    // 同批删掉的 `syntheticLineTimingSection()` 已于 2026-09-26 恢复，见上面那个方法。
 
     @ViewBuilder private func neteaseRomajiLocalSection() -> some View {
         Section(

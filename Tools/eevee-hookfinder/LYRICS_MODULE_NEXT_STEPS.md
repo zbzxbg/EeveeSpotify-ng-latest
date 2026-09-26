@@ -497,6 +497,87 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 33. 「补时间轴」改回真开关 + 多级回退的署名（2026-09-26）
+
+**材料**：`C:\dsh\readlog\eeveespotify_debug.log`（9/26 00:39–00:42，Spotify 9.1.86 / iOS 27，下文简称日志 29）
+
+### 33.1 起因：日志 29 里唯一一处署名错误
+
+用户报"柏树（CYPARISS）那首歌还是只显示 EeveeSpotify"。逐曲对照（7 首，6 首正常）：
+
+| 曲目 | 来源设置 | 结果 | 卡片底部 |
+|---|---|---|---|
+| SECRET / 君は花火 | 多级回退 | Musixmatch / PetitLyrics 成功 | 正常 ✔ |
+| **最後の希望 - CYPARISS** | **多级回退** | **四源全败 → 占位** | **只有 `EeveeSpotify`** ❌ |
+| Fade Away / Dog Eats Dog | 网易云 | NetEase 成功 | 正常 ✔ |
+| Don't Hesitate / Live, Love, Lacerate | 网易云 + Genius 回退 | **Genius 兜底成功** | `Genius (EeveeSpotify)` ✔ |
+
+**根因（代码级，不是猜）**：`lastRequestedLyricsSourceDescription` 全仓库**只有一处写入** ——
+`CustomLyrics.x.swift` 的 `requestSingleSource` 入口（第 255 行）。而**多级回退那一段自己写了一个
+for 循环，从不经过 `requestSingleSource`**，所以这个全局在整个多级回退模式下恒为空串 →
+`makeUnavailableLyrics` 的 `providedBy` 永远落到 `"EeveeSpotify"` 那一支。
+§31.1 当时只在**单源**路径上验证过（那一节自己写着"日志 27 这一例没有走 Genius 兜底"），
+所以看起来是修好了。
+
+**改法**：
+
+1. 多级回退分支入口写 `lastRequestedLyricsSourceDescription = LyricsSource.multiLevel.description`
+   → 卡片底部显示 `多级回退 (EeveeSpotify)`（**用户选定**：署这条链本身，而不是最后试的那个源）；
+2. 进 `loadCustomLyricsForCurrentTrack` **先清空**它 —— 否则从单源切到多级回退后失败，
+   会显示 `NetEase (EeveeSpotify)`，把一个**这次根本没被问过**的源写成"没找到词"。
+   单源路径在 `requestSingleSource` 入口写回，不受影响。
+
+⚠️ **已知遗留（本轮没做）**：这个全局被并发的歌词请求共享（日志 29 里同一首 7 秒内请求两次、
+不同曲目也可能重叠），严格说仍有竞态；彻底修法是把它变成随请求传递的上下文。
+
+### 33.2 「补时间轴」恢复为开关（用户要求："干脆不要写死"）
+
+§23 曾把它写死成 `true`，现在改回读 UserDefaults：
+
+| 文件 | 改动 |
+|---|---|
+| `Settings/ngzhwm/ngzhwmSettingsViewModel.swift` | 恢复 `syntheticLineTimingKey`；getter 改为 `bool(forKey:defaultValue: true)` |
+| `…/Lyrics/ViewModels/EeveeLyricsSettingsViewModel.swift` | 恢复 `@Published syntheticLineTiming`（初值必须走默认值 getter）+ 加进 `animationValues` |
+| `…/Lyrics/Views/EeveeLyricsSettingsView.swift` | 恢复 `syntheticLineTimingSection()`，位置在 `hideOnErrorSection()` 之后；**无 footer**（用户："介绍不需要了"） |
+| `…/ViewModels/…+setupBindings.swift` | 恢复 `[Settings] synthetic line timing -> ON/OFF` |
+| `en` / `zh-CN` | `ngzhwm_synthetic_line_timing`（`Fill in Missing Lyric Timing` / `补全歌词时间轴`） |
+
+**默认 ON**（与最初引入时一致）：保持"Genius 这类纯文本源也能出模块"的既有行为；
+关掉它才是实验组。启动那行 `[INIT] synthetic line timing: ON/OFF` 仍是 A/B 的分组标记。
+
+**对"关掉会怎样"的预判（未验证）**：
+- `LyricsDto.swift:81` 会把 `timeSynchronized` 算成 `false`（Genius / Petit 纯文本 / 占位）；
+- 卡片**应该还在** —— 存在性由 scrollsita 的 `5` 元素决定，注入是写死启用的；
+  最接近的先例是日志 12/13 的强制占位实验（`timeSynchronized=false` 的 payload 确实显示在卡片里）；
+- §7.4 那次"07:48 关掉合成 → 单行和卡片都没有"**不能用来预测现在** —— 那是在补卡片注入
+  （§8 引入、§10 才真机验证有效）**之前**。
+
+**两个必须先补的日志盲点**（否则这次 A/B 只能靠肉眼反推）：
+1. 交出去的 payload 的 `timeSynchronized` / 带 offset 的行数**从来没打印过**
+   （`synthetic line timing applied` 只在"补了"的时候打，关掉的那一组完全静默）；
+2. 占位那条路（`makeUnavailableLyrics`）补时间轴时**不打任何日志**。
+
+### 33.3 ⚠️ 未验证 / 未做完
+
+- **没有编译验证**：本机没有 Swift 工具链（`swift` / `xcrun` / `theos` / `make` 全都不存在），
+  且本轮 pwsh 执行器又挂了（`0xC0000142`，`git log`、`Get-Content` 一律这个码），
+  连 `Tools/l10n_lint.py` 都没能跑。改动是**人工逐处复核**的：四处是"新增属性 / 新增调用"，
+  唯一的控制流改动是 `loadCustomLyricsForCurrentTrack` 头部多一次赋值（不改变分支结构）。
+- **l10n 只加了 `en` / `zh-CN`**：另外 25 个 locale 缺 `ngzhwm_synthetic_line_timing`。
+  运行期**不会露出 key 名** —— `BundleHelper.localizedString` 在本 locale 查不到时会显式回落到
+  `enBundle`（`BundleHelper.swift:52-62`）；但 `Tools/l10n_lint.py` 会把这 25 个报成 MISSING。
+  补法（等 shell 恢复）：把 en 那一行照抄进各 locale 末尾的 `/* AUTO-FILLED (untranslated) */` 块。
+- 日志 29 里另外几个**本轮没动**的真问题：多级回退里 Genius 只给 3s（它自己两次请求各 10s 上限，
+  所以每次都是"超时"而非被评估）；LRCLIB 的 `semaphore.wait()` 无超时 + `LrclibSong.instrumental`
+  是非可选（404 的错误体被当歌词解码 → `DecodingError`），叠加本次环境的 TLS `-1200`，
+  每轮白烧 3s；多级回退链路里**没有网易云**（同一场日志里网易云 3/3 成功）。
+- 另外记一笔：`[Shell] ⚠️ stand-in unavailable` 在日志 29 里出现 8 次，对应 6 首歌，
+  **与歌词源无关** —— 它出现在"关闭全屏歌词页"那一刻，而这一场每一首都是
+  `attach declined — no word-level timing`（§30 的设计），我们那层根本没挂，自然拍不出替身。
+  只有当某首**真有逐词数据**时才需要担心"关闭时一闪"是否因此回归。
+
+---
+
 ## 32. 「壳写着新歌名、歌词还是上一首的」= 切歌没来歌词请求时的陈旧行模型（2026-09-25，日志 28）
 
 用户原话：waka 那首歌（Planetarium）**底子是 Spotify 自己的 PetitLyrics，我们那层只盖住

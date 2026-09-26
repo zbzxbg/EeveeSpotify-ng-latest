@@ -39,9 +39,23 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
     // 已移除「AMLL 优先」（2026-09-25，用户反馈没意义）：AMLL 仍然是来源选择器里的
     // 一个普通来源，但不再有"先试 AMLL、不合格再回退"的那条链。
     
-    // 已移除三个开关（2026-09-25）：`hideOfficialLyrics` / `syntheticLineTiming` /
-    // `injectLyricsCardElement` —— 它们对应的行为已经在 `NgzhwmSettingsViewModel` 里
-    // **写死启用**（见那三个 getter 的说明），设置页不再暴露、也不再写 UserDefaults。
+    /// 「给无时间轴的歌词补时间轴」。
+    ///
+    /// ⚠️ 初值必须走默认值 getter（`isSyntheticLineTimingEnabled`），不能用
+    /// `UserDefaults.bool(forKey:)` —— 后者在 key 还没写过时返回 false，
+    /// 会把一个"默认开"的开关显示成关。
+    @Published var syntheticLineTiming = NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled {
+        didSet {
+            UserDefaults.standard.set(
+                syntheticLineTiming,
+                forKey: NgzhwmSettingsViewModel.syntheticLineTimingKey
+            )
+        }
+    }
+
+    // 已移除两个开关（2026-09-25）：`hideOfficialLyrics` / `injectLyricsCardElement` ——
+    // 它们对应的行为已经在 `NgzhwmSettingsViewModel` 里**写死启用**（见那两个 getter
+    // 的说明），设置页不再暴露、也不再写 UserDefaults。
     
     // 注：背景相关（模糊封面 / 系统材质）**没有** Published 属性 ——
     // 它们不是用户可选项，而是跟随「更好的逐词歌词」自动启用。
@@ -116,7 +130,9 @@ class EeveeLyricsSettingsViewModel: ObservableObject {
             lyricsOptions,
             betterWordByWordLyrics,
             wordByWordLyrics,
-            // ⚠️ `amllPreferred`（已删功能）与 `hideOfficialLyrics`（已写死启用）都不能再列在这里 ——
+            syntheticLineTiming,
+            // ⚠️ `amllPreferred`（已删功能）与 `hideOfficialLyrics` /
+            // `injectLyricsCardElement`（已写死启用）都不能再列在这里 ——
             // 属性本身没了，列着就是编译错误。
             disableLyricsFeature,
             removeMxmInterludeSymbol,

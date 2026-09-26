@@ -115,10 +115,24 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
     // lyricsSource == .multiLevel -> 固定顺序多级回退（并发 + 超时）
     // 其它来源 -> 用户选择的单一源 + 可选 Genius 回退
+
+    // 署名先清空：否则"上一次问的是谁"会残留到这一次的失败路径上。
+    // 两条分支都会在真正发请求之前写回它（单源在 `requestSingleSource` 入口，
+    // 多级回退在下面那一行）。
+    lastRequestedLyricsSourceDescription = ""
+
     var source = UserDefaults.lyricsSource
     if source == .multiLevel {
 
         writeDebugLog("[Lyrics] Multi-level fallback enabled")
+
+        // ⚠️ 这一段**不经过 `requestSingleSource`**，所以必须自己写这个署名 ——
+        // 否则它一直是空串，占位 payload 的 `providedBy` 只会显示成裸的
+        // "EeveeSpotify"（真机 2026-09-26 日志：`最後の希望 - CYPARISS` 四源全败，
+        // 卡片底部只有 `EeveeSpotify`，看不出是哪个环节没找到词）。
+        // 多级回退不是"某一个源"，所以署这条链本身（本地化后 = "多级回退"）。
+        lastRequestedLyricsSourceDescription = LyricsSource.multiLevel.description
+
         let attempts: [LyricsSource] = [.musixmatch, .petit, .lrclib, .genius]
         for (index, source) in attempts.enumerated() {
             writeDebugLog("[Lyrics] Attempt \(index + 1)/\(attempts.count): \(source.description)")
