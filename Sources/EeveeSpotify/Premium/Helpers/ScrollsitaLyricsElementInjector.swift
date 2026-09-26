@@ -44,6 +44,129 @@ enum ScrollsitaLyricsElementInjector {
         url.path.contains("/scrollsita/v1/scroll/spotify:track:")
     }
 
+    // MARK: - 诊断：**每一条**响应的元素清单
+
+    /// 打出这份元素列表里每个元素的**类型号**与它内部的 `spotify:` URI。只读、只打日志。
+    ///
+    /// 为什么必须"每条都打"：正在播放页的模块列表会在不同时刻被重新请求，而同一首歌
+    /// 拿到的**内容并不总是同一份**（预取 / 重进 / 客户端缓存都会改变它）。真机观察到的
+    /// 现象是"预热卡一会有一会没有、第一次进页面和退出重进还不一样"—— 那最可能就是
+    /// 列表内容不同，而不是渲染问题。
+    ///
+    /// 改动前只有"注入成功"才打一行，于是三种完全不同的情况共用一片静默：
+    ///   · 服务端本来就发了 `5`（没动手，正常）；
+    ///   · 解析不过 / 不是元素列表（不敢动）；
+    ///   · 客户端压根没走网络（我们连响应都没看到）。
+    ///
+    /// 解析刻意**不用严格 wire format**：元素类型取条目的第一个字段号（那是结构性的、
+    /// 必须准），而元素内容用"扫 ASCII 里的 `spotify:` 串"来呈现 —— 这样即使某条响应
+    /// 的结构变了，也还能看见它引用了哪首曲目 / 哪张专辑，而不是只剩一片空白。
+    static func logElementManifest(url: URL, body: Data) {
+        let track = trackURI(from: url) ?? "?"
+        let bytes = [UInt8](body)
+        var index = 0
+
+        guard let firstKey = readVarint(bytes, &index),
+              firstKey >> 3 == 1, firstKey & 7 == 2,
+              let elementList = readLengthDelimited(bytes, &index) else {
+            writeDebugLog(
+                "[Scrollsita] manifest track=\(track) body=\(bytes.count)B"
+                    + " — not an element list (left untouched)"
+            )
+            return
+        }
+
+        var cursor = 0
+        var descriptions: [String] = []
+        var has5 = false
+        var truncated = false
+
+        while cursor < elementList.count {
+            guard let key = readVarint(elementList, &cursor),
+                  key >> 3 == 1, key & 7 == 2,
+                  let item = readLengthDelimited(elementList, &cursor) else {
+                descriptions.append("<?>")
+                break
+            }
+
+            var itemIndex = 0
+            guard let innerKey = readVarint(item, &itemIndex) else {
+                descriptions.append("<?>")
+                continue
+            }
+
+            let type = innerKey >> 3
+            if type == lyricsElementFieldNumber { has5 = true }
+
+            // 上限：元素最多列 12 个（实测一条响应 2–6 个；5utfun 那种 33KB 的推广响应会更多）。
+            if descriptions.count < 12 {
+                let uris = spotifyURIs(in: item)
+                descriptions.append(uris.isEmpty ? "\(type)" : "\(type){\(uris.joined(separator: ","))}")
+            } else {
+                truncated = true
+            }
+        }
+
+        writeDebugLog(
+            "[Scrollsita] manifest track=\(track) body=\(bytes.count)B has5=\(has5)"
+                + " elements=[\(descriptions.joined(separator: " "))]"
+                + (truncated ? " …(truncated)" : "")
+        )
+    }
+
+    /// 从一段元素字节里捞出 `spotify:` 开头的可打印串（去重、最多 3 条）。
+    ///
+    /// `spotify:section:` 只留末尾 6 个字符 —— 它们前缀完全相同（`spotify:section:0JQ5DB6s3cssW5Bo6c`），
+    /// 全长会把日志撑爆；而区分靠的正是尾部（`…cGq21` / `…cGq1L` / `…cGq1O` / `…1XJEwt`）。
+    private static func spotifyURIs(in bytes: [UInt8]) -> [String] {
+        let needle = Array("spotify:".utf8)
+        var found: [String] = []
+        var i = 0
+
+        while i + needle.count <= bytes.count {
+            var matched = true
+            for k in 0..<needle.count where bytes[i + k] != needle[k] {
+                matched = false
+                break
+            }
+            guard matched else {
+                i += 1
+                continue
+            }
+
+            var j = i
+            while j < bytes.count, isURIScalar(bytes[j]) { j += 1 }
+            let raw = String(decoding: bytes[i..<j], as: UTF8.self)
+            i = max(j, i + 1)
+
+            let short: String
+            if raw.hasPrefix("spotify:section:"), raw.count > 6 {
+                short = "…" + String(raw.suffix(6))
+            } else if raw.count > 40 {
+                short = String(raw.prefix(40)) + "…"
+            } else {
+                short = raw
+            }
+
+            if !found.contains(short) {
+                found.append(short)
+                if found.count >= 3 { break }
+            }
+        }
+
+        return found
+    }
+
+    /// URI 里允许出现的字节（字母数字 + `:` `.` `_` `-` `+`）。
+    private static func isURIScalar(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x3A, 0x2E, 0x5F, 0x2D, 0x2B:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// 把服务端下发的「歌词卡片」元素**摘掉**（「禁用歌词功能」时用）。
     ///
     /// 为什么需要：卡片的存在性来自这份元素列表（§7 的结论）。所以哪怕我们不再替换歌词，

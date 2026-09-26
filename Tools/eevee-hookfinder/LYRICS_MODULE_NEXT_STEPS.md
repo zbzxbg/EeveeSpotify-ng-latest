@@ -497,6 +497,49 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 35. 三条诊断日志：每条 scrollsita 的元素清单 / 开关状态 / stripper 的 KEEP-DROP（2026-09-26）
+
+**起因**：用户实测"预热卡一会有一会没有"，而且**第一次进听歌页和退出重进拿到的模块不一样**
+（原话：有时候会把歌手信息、预览歌词这些模块重新加载一遍；第一次可能"预热卡 + 歌词卡同时"，
+退出重进预热卡又没了）。用户明确说**无法稳定复现**，所以这一轮的目标不是猜，而是
+**把判据补齐**——加完日志复现一次就能直接读出结论。
+
+**改动（全部只读、只打日志，不改任何行为）**：
+
+| 文件 | 改动 |
+|---|---|
+| `Premium/Helpers/ScrollsitaLyricsElementInjector.swift` | 新增 `logElementManifest(url:body:)`：解出**每个元素的类型号** + 该元素内部扫到的 `spotify:` URI（`spotify:section:` 只留末 6 字符），打一行 `[Scrollsita] manifest track=… body=…B has5=… elements=[…]`。元素类型取条目**第一个字段号**（结构性、必须准），内容用**扫 ASCII `spotify:` 串**（不依赖严格 wire format，结构变了也还能看见它引用了哪首曲目） |
+| `Premium/Helpers/SpotifyResponsePatcher.swift` | `patch()` 的 scrollsita 分支**最前面**调一次 manifest —— 与开关无关、**永远打**。放在这里是因为 `shouldModify` 已被 `BrowsitaSectionStripper.shouldHandle` 覆盖 `/scrollsita/`，**开关关着时也会走到这里** |
+| `Tweak.x.swift` | `[INIT]` 那行加 `card element inject: ON/OFF` |
+| `Premium/Helpers/BrowsitaSectionStripper.swift` | 新增 `isVerbose(path)`：**全局 `verboseLog` 或这条 URL 是 scrollsita** 才打详细日志（browsita/casita 的 section 太多，全局打开会刷爆日志）。DROP / KEEP / bail 三处改用它 |
+
+**为什么这三条是"唯一直接证据"**：
+- 改动前，"没有注入日志"至少混着三种情况 —— 服务端本来就带 `5`（没动手）／解析不过（不敢动）／
+  **客户端走了缓存、我们连响应都没看到**；
+- 而"预热卡"要判定，必须比较**同一首歌两次加载各自拿到的元素列表** —— 这两份列表现在会各打一行。
+
+**判读方法（拿到日志后）**：
+
+1. 找同一 `track=` 的**多行** manifest（第一次进页面一行、退出重进一行）；
+2. 两次 `elements=[…]` 里"**第一次有、第二次没有**"的那个类型号 = 预热卡；
+3. 若两次**完全一样** → 预热卡不是来自元素列表，改查旁路接口。日志里能看到正在播放页的
+   旁路只有 `/merch-npv-service/v1/merch/track/<id>`、`/cultural-moments-entrypoints/v1/entrypoint`、
+   `spotify.liveeventdistribution.v1.EventCardInfoService/EventCardInfo` —— 都不像"预热/预收藏"，
+   所以**大概率就是元素列表里的某个类型**；
+4. `[STRIP] KEEP /scrollsita/… idx=N size=…` 会告诉我们 stripper 是否把那个元素判为"不是广告"
+   （判 KEEP ⇒ 按现有标记表摘不掉，只能像摘 `5` 那样**按类型号**摘）。
+
+**已有的元素类型样本**（日志 3 解出，供比对）：`2`=关于艺人、`3`=探索、`4`=canvas、
+`5`=§7.3 猜的那个（我们注入的也是它）、`11`=演出（内容含 `spotify:concert:`）。
+
+**⚠️ 未验证**：本机没有 Swift 工具链，且本轮 pwsh 执行器**全程** `0xC0000142`
+（连 `python -c` 都是这个码），所以**没有编译验证**，也跑不了 l10n linter。
+改动是人工逐处复核的：新增函数只用到同文件的 `private static` helper
+（`readVarint` / `readLengthDelimited` / `trackURI` / `isURIScalar`），三处调用点都在作用域内。
+本轮**没有新增 l10n 键**（§34 留下的 25 个 locale 缺口未动）。
+
+---
+
 ## 34. 「补卡片元素」也改回真开关；日志 3 解出的元素清单（2026-09-26）
 
 **材料**：`C:\dsh\readlog\eeveespotify_debug 3.log`（9/26 02:13，Spotify 9.1.86 / iOS 27）、

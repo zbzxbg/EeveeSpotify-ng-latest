@@ -398,6 +398,16 @@ enum SpotifyResponsePatcher {
             // Empty body = "no ad to render" to the DAC consumer.
             return PatchResult(data: Data(), tag: .dacEmpty)
         }
+        // 诊断：scrollsita 的**每一条**响应都打一份元素清单 —— 与开关无关，永远打。
+        //
+        // 这是排查"预热卡时有时无 / 第一次进页面和退出重进不一样"的唯一直接证据：
+        // 同一首歌在不同时刻拿到的元素列表**可能不是同一份**，而"没有注入日志"本身
+        // 分不出"服务端本来就带那个元素"和"客户端走了缓存、我们没看到响应"。
+        // 见 `ScrollsitaLyricsElementInjector.logElementManifest`。
+        if ScrollsitaLyricsElementInjector.shouldHandle(url) {
+            ScrollsitaLyricsElementInjector.logElementManifest(url: url, body: buffer)
+        }
+
         // 「禁用歌词功能」时把服务端下发的「歌词卡片」元素**摘掉** —— 否则卡片照样在
         // （只是内容换成我们那份"未找到歌词"），用户会觉得开关没生效。
         if let stripped = ScrollsitaLyricsElementInjector.strippingLyricsElementIfNeeded(

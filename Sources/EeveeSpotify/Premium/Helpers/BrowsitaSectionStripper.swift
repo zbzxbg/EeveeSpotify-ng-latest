@@ -29,6 +29,15 @@ enum BrowsitaSectionStripper {
 
     static var verboseLog: Bool = false
 
+    /// 这一条 URL 要不要打详细日志。
+    ///
+    /// ⚠️ 与 `verboseLog` 的区别：browsita/casita 的 section 数量很大，全局打开会把日志刷爆；
+    /// 而排查"正在播放页多出一张预热卡"恰恰需要知道 stripper 对 **scrollsita 的每个元素**
+    /// 是 KEEP 还是 DROP。所以规则是"全局开关 **或** 这条 URL 是 scrollsita"。
+    private static func isVerbose(_ path: String) -> Bool {
+        verboseLog || path.lowercased().contains("/scrollsita/")
+    }
+
     static func shouldHandle(_ url: URL) -> Bool {
         let p = url.path.lowercased()
         // /casita/v1/feeds is flat tab-chip list, parser would mis-walk it.
@@ -64,10 +73,10 @@ enum BrowsitaSectionStripper {
             guard contentEnd <= containerEnd else { return bail(path, "section-len-overflow idx=\(idx)") }
 
             if let markers = adHits(data, start: contentStart, end: contentEnd) {
-                if verboseLog { writeDebugLog("[STRIP] DROP \(path) idx=\(idx) size=\(secLen) hits=\(markers.joined(separator: ","))") }
+                if isVerbose(path) { writeDebugLog("[STRIP] DROP \(path) idx=\(idx) size=\(secLen) hits=\(markers.joined(separator: ","))") }
                 dropped += 1
             } else {
-                if verboseLog { writeDebugLog("[STRIP] KEEP \(path) idx=\(idx) size=\(secLen)") }
+                if isVerbose(path) { writeDebugLog("[STRIP] KEEP \(path) idx=\(idx) size=\(secLen)") }
                 newContainer.append(data.subdata(in: sectionTagStart..<contentEnd))
                 kept += 1
             }
@@ -110,7 +119,7 @@ enum BrowsitaSectionStripper {
     }
 
     private static func bail(_ path: String, _ reason: String) -> Data? {
-        if verboseLog { writeDebugLog("[STRIP] bail \(path) reason=\(reason)") }
+        if isVerbose(path) { writeDebugLog("[STRIP] bail \(path) reason=\(reason)") }
         return nil
     }
 

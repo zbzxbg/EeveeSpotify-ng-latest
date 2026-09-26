@@ -367,14 +367,22 @@ struct EeveeSpotify: Tweak {
         writeDebugLog("[INIT] Hook target: \(EeveeSpotify.hookTarget)")
         writeDebugLog("[INIT] Patch type: \(UserDefaults.patchType)")
         writeDebugLog("[INIT] Lyrics source: \(UserDefaults.lyricsSource)")
-        // 三个**写死启用**的修复 + 一个真开关，一次打出来：
-        //   · 合成行级时间轴 / 隐藏官方歌词 / 补卡片元素 —— 2026-09-25 起写死在
-        //     `NgzhwmSettingsViewModel` 里（恒为 ON），这里记的是**实际生效值**；
+        // 两个真开关（合成行级时间轴 / 补卡片元素）+ 一个写死启用的修复（隐藏官方歌词）
+        // + 禁用歌词功能，一次打出来：
+        //   · 合成行级时间轴 / 补卡片元素 —— 2026-09-26 起恢复为读 UserDefaults 的真开关，
+        //     这里记的是**实际生效值**（默认都是 ON）；
+        //   · 隐藏官方歌词 —— 2026-09-25 起写死在 `NgzhwmSettingsViewModel` 里；
         //   · 禁用歌词功能 —— 仍然是用户开关，值是它自己。
-        // 这行同时是排障时的"这一轮跑的是哪一档"标记（以前 A/B 就靠它分组）。
+        // 这行同时是排障时的"这一轮跑的是哪一档"标记（A/B 就靠它分组）。
+        //
+        // ⚠️ 「补卡片元素」必须打出来：排查"预热卡时有时无"时，日志里其余线索全是
+        // 间接的（没注入 ≠ 开关关着 —— 也可能是服务端本来就带那个元素，或客户端走了
+        // 缓存、我们连响应都没看到）。没有这一行，状态只能靠猜。
         writeDebugLog(
             "[INIT] synthetic line timing: "
                 + "\(NgzhwmSettingsViewModel.isSyntheticLineTimingEnabled ? "ON" : "OFF")"
+                + " | card element inject: "
+                + "\(NgzhwmSettingsViewModel.isLyricsCardElementInjectionEnabled ? "ON" : "OFF")"
                 + " | official lyrics hidden: "
                 + "\(NgzhwmSettingsViewModel.isOfficialLyricsHidden ? "ON" : "OFF")"
                 + " | lyrics feature disabled: "
