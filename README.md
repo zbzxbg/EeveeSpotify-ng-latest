@@ -9,7 +9,7 @@ Versions under development are not made publicly available to users.
 | | Version |
 | --- | --- |
 | Latest public release | v0.1.0 （Spotify 9.1.76） |
-| Current development version | v1.0.0-beta.23 (Spotify 9.1.86) |
+| Current development version | v1.0.0-beta.27 (Spotify 9.1.86) |
 | Development version last updated | 2026/09/26 |
 
 ##  Modifications
