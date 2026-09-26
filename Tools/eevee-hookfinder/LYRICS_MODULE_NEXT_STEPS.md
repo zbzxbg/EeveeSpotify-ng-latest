@@ -497,6 +497,114 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 37. 预热卡三条线全部收口：元素/旁路都排除，剩"数据从哪来"—— 加两支探针（2026-09-26，日志 7 + 照片 8）
+
+**材料**：`eeveespotify_debug 7.log`、`C:\dsh\else\8.jpg`。
+
+### 37.1 坏卡长什么样（照片 8，Dog Eats Dog，东京 14:06 / UTC 05:06）
+
+```
+即将发布
+已发布时间：2021年5月27日          ← 五年前的日期
+Dog Eats Dog / 2021・即将发布的新歌
+[ 预收藏 + ]                       ← 这一张按钮状态是**对的**（照片 5 那张错成"已预收藏 ✓"）
+```
+
+### 37.2 三条候选，两条已被日志否证
+
+1. **元素列表 `12`？否。** 日志 6 的 `MONTAGEM KOKORO` 显示的是**正常**card（"在 6 天内发布" + "预收藏 +"），
+   它的元素列表里**有 `12`**；而坏卡出现在**没有 `12`** 的曲目上（Fade Away / Notes of Color / Dog Eats Dog）。
+   而且把 `12` 拆开只有 album URI + section URI，**没有日期字段**。
+2. **三个旁路模块接口？否。** 日志 7 里它们**全部返回错误**：
+   ```
+   [NPVModule] status=503 len=0 type=application/grpc …/EventCardInfoService/EventCardInfo
+   [NPVModule] status=404 type=application/json /cultural-moments-entrypoints/v1/entrypoint
+               {"code":5,"message":"No entrypoint is defined for entity_uri 'spotify:track:2XMcZ…'"}
+   [NPVModule] status=404 type=application/json /merch-npv-service/v1/merch/track/2XMcZ…
+               {"code":5,"message":"No artists with merch for track_id …, album_id 2AB7cHbpyVmmpAJSwFUIoE"}
+   ```
+   （上一轮 §36.2 的"请求在不在"推断**是错的** —— 探针这次的作用就是把这条错误的路封掉。）
+3. **剩下：数据在本次会话更早的响应里，或在客户端本地。**
+
+**同一首歌两次加载的 HTTP 数据完全一样**（日志 7：05:06:39 与 05:07:35 两行 manifest 逐字节同形，
+都是 `373B, elements=[2,3,4], has5=false` → 都注入成 `458B`），而坏卡只在第一次出现 ⇒ 差别不在
+"这一次页面请求"里。
+
+**用户提供的关键对位**：第一次的模块是「预览歌词 / **过时预热卡** / 关于艺人 / 制作人」，
+重进是「制作人 / **探索** / 关于艺人 / 预览歌词」⇒ **坏卡是顶掉了"探索"那一格**，不是凭空多出来的。
+（顺带把映射钉死：`5`=预览歌词卡、`2`=关于艺人、`3`=探索、`4`=**制作人**、`12`=正版预热卡。）
+
+### 37.3 用户提出"是不是 Premium 里的改动造成的" —— 排查结论
+
+| 检查 | 结果 |
+|---|---|
+| Premium 目录按 mtime | 除本轮三个诊断文件外，**只有 `DynamicPremium+ModifyingFunctions.swift`（9/25 07:58）**，其余全是 9/11 23:05（仓库导入时间） |
+| `git log --stat -4`（四个 `test` 提交） | 只有本轮改动的文件，**没有夹带** |
+| 9/25 那次改的是什么 | 我们自己的：§6.1 的 flag 诊断 + §7.2 把 `lyrics_entry_point_enabled` 钉成 true |
+
+**但里面确实有一条作用面正好是"正在播放页模块列表"的补丁**（第 366–367 行）：
+
+```swift
+// 😡😡😡 spotify, stop changing the scroll logic
+EeveePropertyReplacement(name: "should_nova_scroll_use_scrollsita", modification: .remove),
+```
+
+问题在于：`.remove` 命中 0 条时是**静默 no-op**，而 `dumpLyricsFlags` 只打名字含 `lyric` 的 flag
+（`guard name.lowercased().contains("lyric")`）—— **我们连服务端发不发这条都不知道**。
+
+### 37.4 本轮改动（两支探针，一次写全）
+
+**（1）flag dump 扩面** —— `DynamicPremium+ModifyingFunctions.swift`
+
+| 新增/改动 | 说明 |
+|---|---|
+| `npvFlagNeedles` | `scroll / nova / prerelease / pre_release / presave / pre_save / moment / merch / card` |
+| `isFlagOfInterest(_:)` | lyric 一批 + 上面一批，两处共用 |
+| `renderStructuredValue(_:)` | 把原来内联在 `dumpLyricsFlags` 里的 switch 抽出来共用，避免再分叉 |
+| `dumpNPVFlags(_:)` | 在**改写之前**打印 `[Flags] npv flag — scope=… name=… bool/int/enum=…`；按 `scope.name=值` 去重，每次启动上限 `npvFlagLogLimit = 60` 行 |
+| `reportLyricsReplacementOutcome` | 过滤条件从"含 lyric"改成 `isFlagOfInterest` ⇒ `should_nova_scroll_use_scrollsita` 的 `— N match(es)` 也会打出来 |
+| `modifyAssignedValues` | 头部多一次 `dumpNPVFlags(values)` |
+
+**判读**：
+- 打出 `[Flags] npv flag … name=should_nova_scroll_use_scrollsita` → 服务端确实下发；
+  再看 `[Flags] replacement should_nova_scroll_use_scrollsita — N match(es)`：
+  **N=0** 说明 scope 不匹配（我们没改到），**N>0** 说明 `.remove` 真生效 —— 那才值得做"注释掉它"的 A/B；
+- **完全没有这条 flag** → `.remove` 是空枪，**这条 patch 与坏卡无关，当场排除**，不用构建 A/B。
+
+**（2）「预热 / 预发行」关键字探针** —— `SpotifyResponsePatcher.probePreReleaseNeedles`
+
+扫**所有**响应字节（不只旁路模块），找 11 个关键字：
+`prerelease / pre_release / pre-release / presave / pre_save / pre-save / preorder / pre-order /
+upcoming / release_date / releasedate`（全部小写、大小写不敏感）。
+命中打一行、同一 `path + needle` 只报一次：
+
+```
+[PreRelease] HIT path=… needle=prerelease ctx=…·{"album_id":"…","state":"prerelease"}·…
+```
+
+实现要点：按 task 保留 16 字节尾巴**跨块拼接**（避免字符串被 chunk 边界切断 —— 日志 10 的
+`has_lyrics` 探针就栽在这上面）；首字节分派表（只有 `p/r/u` 开头的位置才逐个比较）；
+单块 >256KB 不扫；命中处前后各 80 字节渲染成可打印上下文。**只读、不改字节。**
+调用点在两个钩子的 `didReceiveData`（与其它探针并列）。
+
+**判读**：
+- 扫到 → 立刻知道是**哪个响应**在说"这专辑还没发"，下一步看是改它还是挡它；
+- 整个会话一个命中都没有 → 数据在客户端本地（keychain / 内存实体缓存），
+  网络层无解，方向要换成"改本地那面旗子"（`SPTPlayerTrack.metadata()` 那条）。
+
+### 37.5 ⚠️ 未验证
+
+- **没有编译验证**：本机没有 Swift 工具链，且沙箱里 `python` 一律 `0xC0000142`
+  （`git` / `Get-ChildItem` 能跑，`python -c` 不行），所以连"括号配平"这种检查都跑不了。
+  改动人工逐处复核：flag 那侧新增的都是 file-private 函数/常量，唯一改到既有函数的是
+  `dumpLyricsFlags`（只把内联 switch 换成共用函数）与 `reportLyricsReplacementOutcome`
+  （只换过滤条件）；探针那侧全部是新增，只用到同文件的 `lock` / `writeDebugLog`。
+- 本轮**没有新增 l10n 键**；§34 留下的 25 个 locale 缺口未动。
+- **不要**把「覆盖配置」开关当这次的 A/B：`modifyAssignedValues`（`.remove` 就在里面）
+  在 customize 响应上是**无条件**跑的，切那个开关关不掉这些替换。
+
+---
+
 ## 36. 预热卡：元素 `12` 是**正版**，坏卡来自旁路模块（2026-09-26，日志 6 + 照片 5/7）
 
 **材料**：`eeveespotify_debug 6.log`、`C:\dsh\else\6.jpg`、`5.jpg`、`7.jpg`。

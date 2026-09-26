@@ -450,31 +450,83 @@ private let propertyReplacements = [
 private var reportedLyricsFlags = Set<String>()
 private var reportedLyricsReplacements = Set<String>()
 
+/// 除了名字含 `lyric` 的，还要盯这一批 flag —— 它们决定**正在播放页的模块列表**怎么来：
+///
+///   · `scroll` / `nova` —— `should_nova_scroll_use_scrollsita` 就是我们在
+///     `propertyReplacements` 里 **`.remove`** 掉的那一条（注释写着"spotify, stop changing
+///     the scroll logic"）。它的 `.remove` 到底有没有动到东西，在此之前**完全不可见**：
+///     `.remove` 命中 0 条时是静默 no-op。
+///   · `prerelease` / `presave` / `moment` / `merch` / `card` —— "即将发布 / 预收藏"那张卡
+///     的所有可能来源（见 `LYRICS_MODULE_NEXT_STEPS.md` §36/§37）。
+private let npvFlagNeedles = [
+    "scroll", "nova",
+    "prerelease", "pre_release", "presave", "pre_save",
+    "moment", "merch", "card",
+]
+
+/// 每次启动最多打这么多行，防止某个宽泛的词（`card` / `merch`）把日志刷爆。
+private let npvFlagLogLimit = 60
+private var reportedNPVFlags = Set<String>()
+private var reportedNPVFlagCount = 0
+
+/// 这一条 flag 名字是不是我们关心的（lyric 一批 + `npvFlagNeedles` 一批）。
+private func isFlagOfInterest(_ name: String) -> Bool {
+    let lower = name.lowercased()
+    if lower.contains("lyric") { return true }
+    return npvFlagNeedles.contains { lower.contains($0) }
+}
+
+/// 把 `structuredValue` 渲染成一行（两份 dump 共用，避免再次分叉）。
+private func renderStructuredValue(_ value: AssignedValue) -> String {
+    switch value.structuredValue {
+    case .boolValue(let v)?: return "bool=\(v.value)"
+    case .intValue(let v)?:  return "int=\(v.value)"
+    case .enumValue(let v)?: return "enum=\(v.value)"
+    case nil:                return "unset"
+    }
+}
+
 private func dumpLyricsFlags(_ values: [AssignedValue]) {
     for value in values {
         let name = value.propertyID.name
         guard name.lowercased().contains("lyric") else { continue }
 
         let scope = value.propertyID.scope
-        let rendered: String
-        switch value.structuredValue {
-        case .boolValue(let v)?: rendered = "bool=\(v.value)"
-        case .intValue(let v)?:  rendered = "int=\(v.value)"
-        case .enumValue(let v)?: rendered = "enum=\(v.value)"
-        case nil:                rendered = "unset"
-        }
+        let rendered = renderStructuredValue(value)
 
         guard reportedLyricsFlags.insert("\(scope).\(name)=\(rendered)").inserted else { continue }
         writeDebugLog("[Flags] lyrics flag — scope=\(scope) name=\(name) \(rendered)")
     }
 }
 
+/// 见 `npvFlagNeedles` 的说明。与 `dumpLyricsFlags` 一样在**改写之前**打印，只读。
+private func dumpNPVFlags(_ values: [AssignedValue]) {
+    for value in values {
+        guard reportedNPVFlagCount < npvFlagLogLimit else { return }
+
+        let name = value.propertyID.name
+        // 含 "lyric" 的那批由 `dumpLyricsFlags` 负责，这里不重复。
+        guard isFlagOfInterest(name), !name.lowercased().contains("lyric") else { continue }
+
+        let scope = value.propertyID.scope
+        let rendered = renderStructuredValue(value)
+
+        guard reportedNPVFlags.insert("\(scope).\(name)=\(rendered)").inserted else { continue }
+        reportedNPVFlagCount += 1
+        writeDebugLog("[Flags] npv flag — scope=\(scope) name=\(name) \(rendered)")
+    }
+}
+
 /// 替换是否**真的命中**了目标。`setBool` / `remove` 命中 0 条时是静默 no-op，
 /// 光看代码看不出来。这一行把"scope 猜错了"从"服务端就是这么下发的"里区分开。
+///
+/// ⚠️ 现在覆盖面是 `isFlagOfInterest`（lyric 一批 + `npvFlagNeedles` 一批）。
+/// 判读 `should_nova_scroll_use_scrollsita` 就靠这个：`— 0 match(es)` 说明
+/// **服务端根本没下发这条 flag**，那我们那条 `.remove` 是空枪，可以直接排除它。
 private func reportLyricsReplacementOutcome(_ values: [AssignedValue]) {
     for replacement in propertyReplacements {
         guard let name = replacement.name,
-              name.lowercased().contains("lyric") else { continue }
+              isFlagOfInterest(name) else { continue }
 
         let scope = replacement.scope
         let hits = values.filter {
@@ -489,6 +541,7 @@ private func reportLyricsReplacementOutcome(_ values: [AssignedValue]) {
 
 private func modifyAssignedValues(_ values: inout [AssignedValue]) {
     dumpLyricsFlags(values)
+    dumpNPVFlags(values)
 
     for replacement in propertyReplacements {
         let matchingIndices = values.indices.filter({ index in

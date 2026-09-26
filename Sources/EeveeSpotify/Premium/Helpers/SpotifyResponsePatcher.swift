@@ -329,6 +329,122 @@ enum SpotifyResponsePatcher {
         }
     }
 
+    // MARK: 「预热 / 预发行」关键字探针
+
+    /// 扫**所有**响应字节，找"这张专辑还没发行 / 可以预收藏"这类字样的来源。
+    ///
+    /// 为什么需要（2026-09-26，日志 5/6/7）：坏卡的两条路已经排除掉了 ——
+    ///   · **元素列表**：坏卡出现在元素列表里**没有 `12`** 的曲目上（Fade Away 只有 2/3/4、
+    ///     Notes of Color 只有 5/2/3/4），而且 `12` 那个元素里**只有 album URI + section URI**，
+    ///     没有任何日期字段；
+    ///   · **三个旁路模块接口**：日志 7 里它们分别返回 **503 / 404 / 404**，体里只有
+    ///     "No entrypoint is defined…" 和 "No artists with merch…"。
+    ///
+    /// 而同一首歌两次加载的 HTTP 数据**完全一样**（日志 7：两行 manifest 逐字节同形），
+    /// 卡却只在第一次出现 ⇒ 数据要么在本次会话**更早的某个响应**里（比如启动时的
+    /// `casita/v1/home` 或播放列表页），要么在客户端本地。本探针负责前者。
+    ///
+    /// 命中就打一行（同一 `path + needle` 只报一次），并带命中处前后各 80 字节的可打印上下文。
+    /// **只读、只打日志、不改任何字节。**
+    private static let preReleaseNeedles: [[UInt8]] = [
+        "prerelease", "pre_release", "pre-release",
+        "presave", "pre_save", "pre-save",
+        "preorder", "pre-order",
+        "upcoming",
+        "release_date", "releasedate",
+    ].map { Array($0.lowercased().utf8) }
+
+    /// 首字节分派表：只有 b ∈ {p, r, u} 的位置才需要逐个 needle 比较。
+    private static let preReleaseNeedlesByFirstByte: [UInt8: [[UInt8]]] = {
+        var map: [UInt8: [[UInt8]]] = [:]
+        for needle in preReleaseNeedles { map[needle[0], default: []].append(needle) }
+        return map
+    }()
+
+    private static var _preReleaseCarry: [Int: Data] = [:]
+    private static var _preReleaseHits = Set<String>()
+    /// 单块超过这个大小就不扫（图片/音频之类的大 blob）。
+    private static let preReleaseScanLimit = 256 * 1024
+    /// 每个 task 保留的尾巴长度：刚好够拼上下一块开头的那几个字节。
+    private static let preReleaseCarryLength = 16
+
+    static func probePreReleaseNeedles(url: URL, taskID: Int, data: Data) {
+        guard !data.isEmpty, data.count <= preReleaseScanLimit else { return }
+
+        lock.lock()
+        let carry = _preReleaseCarry[taskID] ?? Data()
+        var window = Data()
+        window.reserveCapacity(carry.count + data.count)
+        window.append(carry)
+        window.append(data)
+        _preReleaseCarry[taskID] = Data(data.suffix(preReleaseCarryLength))
+        if _preReleaseCarry.count > 128 { _preReleaseCarry.removeAll() }
+        lock.unlock()
+
+        let bytes = [UInt8](window)
+        guard !bytes.isEmpty else { return }
+
+        var hits: [(needle: String, context: String)] = []
+        var index = 0
+
+        while index < bytes.count {
+            guard let candidates = preReleaseNeedlesByFirstByte[asciiLowerByte(bytes[index])] else {
+                index += 1
+                continue
+            }
+
+            for needle in candidates where index + needle.count <= bytes.count {
+                guard matchesASCIIInsensitive(bytes, at: index, needle: needle) else { continue }
+                let needleText = String(decoding: needle, as: UTF8.self)
+
+                lock.lock()
+                let isNew = _preReleaseHits.insert("\(url.path)|\(needleText)").inserted
+                lock.unlock()
+
+                if isNew {
+                    hits.append((needleText, printableContext(bytes, around: index)))
+                }
+                break   // 同一块里同一种 needle 只报一次
+            }
+
+            index += 1
+        }
+
+        for hit in hits {
+            writeDebugLog(
+                "[PreRelease] HIT path=\(url.path) needle=\(hit.needle) ctx=\(hit.context)"
+            )
+        }
+    }
+
+    private static func asciiLowerByte(_ byte: UInt8) -> UInt8 {
+        (0x41...0x5A).contains(byte) ? byte + 0x20 : byte
+    }
+
+    /// 大小写不敏感的 ASCII 比较（needle 已经全部小写）。
+    private static func matchesASCIIInsensitive(_ bytes: [UInt8], at index: Int, needle: [UInt8]) -> Bool {
+        for k in 0..<needle.count where asciiLowerByte(bytes[index + k]) != needle[k] {
+            return false
+        }
+        return true
+    }
+
+    /// 命中处前后各 80 字节的可打印上下文（不可打印字符换成 `·`）。
+    private static func printableContext(_ bytes: [UInt8], around index: Int) -> String {
+        let start = max(0, index - 80)
+        let end = min(bytes.count, index + 80)
+        var out = ""
+        out.reserveCapacity(end - start)
+        for byte in bytes[start..<end] {
+            if byte >= 0x20, byte < 0x7F {
+                out.append(Character(UnicodeScalar(byte)))
+            } else {
+                out.append("·")
+            }
+        }
+        return out
+    }
+
     // MARK: - 「禁用歌词功能」
 
     /// 「禁用歌词功能」是否生效。

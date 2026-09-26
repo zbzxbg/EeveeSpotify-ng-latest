@@ -253,6 +253,8 @@ class SPTDataLoaderServiceHook: ClassHook<NSObject>, SpotifySessionDelegate {
         SpotifyResponsePatcher.probeHasLyricsKey(url: url, taskID: task.taskIdentifier, data: data)
         // 排障：正在播放页的「旁路模块」响应体（预热卡的嫌疑来源）。只读、不改字节。
         SpotifyResponsePatcher.probeNPVModuleBody(url: url, taskID: task.taskIdentifier, data: data)
+        // 排障：全响应扫「预热 / 预发行」关键字（坏卡的数据来源）。只读、不改字节。
+        SpotifyResponsePatcher.probePreReleaseNeedles(url: url, taskID: task.taskIdentifier, data: data)
         if CasitaResponseProbe.shouldProbe(url) {
             CasitaResponseProbe.append(data, for: task)
         }
