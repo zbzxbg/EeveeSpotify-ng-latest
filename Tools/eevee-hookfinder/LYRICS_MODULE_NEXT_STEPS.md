@@ -497,6 +497,56 @@ if let originalColors { $0.colors = originalColors }
 
 ---
 
+## 48. 崩溃事故二：**`objc_copyClassList` 的元素当 Swift 类型用 ⇒ 启动即崩**（2026-09-27 01:42，`Spotify-2026-09-27-014242.ips`）
+
+**材料**：`C:\dsh\readlog\Spotify-2026-09-27-014242.ips`。用户口径："spotify 在打开时崩溃。"
+
+### 48.1 崩溃形状
+
+```
+exception: EXC_BREAKPOINT / SIGTRAP      （brk 1）
+faultingThread: 0（主线程）
+frames: ___forwarding___.cold.4 → ___forwarding___ → _CF_forwarding_prep_0
+        → swift_getObjectType → tryCast(…)
+寄存器:  objc-selector "class" / "__NSGenericDeallocHandler"
+```
+
+### 48.2 根因：`let cls: AnyClass = classList[index]`
+
+§47 之后新增的 `PrereleaseRuntimeClassDump`（本意是"把所有 `Prerelease*` 类的真名捞出来"）
+写了这一句。`objc_copyClassList` 返回的类表里**混着运行时内部垃圾**
+（`__NSGenericDeallocHandler` 这种不是真类的对象），而 Swift 一旦把它当**元类型**用，
+就会 `swift_getObjectType` → 对它发 `class` → 走 `___forwarding___` → **`brk 1`**（启动即崩）。
+
+**注意**：同目录的 `PrereleaseCardProbe` 用 `NSClassFromString` **没崩** ——
+那条路不碰元类型转换。所以"能不能用"取决于**怎么拿到类对象**，不是"能不能用 runtime"。
+
+### 48.3 修法（写死在文件头，防止下次再犯）
+
+1. **不把类对象当 Swift 类型用** —— 只用 C 层 API：`class_getName` /
+   `class_copyMethodList` / `object_getClass` / `method_getName` / `sel_getName`，
+   参数就是 `AnyClass?`；
+2. **不用 `NSStringFromClass(cls)`**（内部同样碰元类型），类名一律
+   `class_getName` + `String(cString:)`；
+3. 每次迭代包 `autoreleasepool`，**拿不到信息就跳过**（绝不强解包）。
+
+### 48.4 教训（两次崩溃的共同点）
+
+| 事故 | 犯的错 | 正确的做法 |
+|---|---|---|
+| §47 | 方法名是从**类元数据**读出来的，就默认了**参数类型**是 `NSString` | 参数类型未知 ⇒ 用 `Any` 原样透传，日志只 `String(describing:)` |
+| §48 | 拿到了**类对象指针**，就当它是 Swift 元类型用 | 只走 C 层 runtime API，不碰 Swift 的类型转换 |
+
+⇒ 一句话：**从运行时"捞"回来的东西（对象、类、方法），一律按"不可信"处理，
+只用 C 接口碰它，绝不交给 Swift 的类型系统。**
+
+### 48.5 ⚠️ 未验证
+
+- 修完**没有编译验证**，也**没有真机验证**（用户需再跑一次确认"启动不崩 + 能出 `[PrerelClasses]`"）；
+- 功能目标未变：这一次仍然只是**只读探针**，用来拿到"这一格被谁填"的入口名字。
+
+---
+
 ## 47. 崩溃事故：**参数类型写成 `NSString` ⇒ 播歌闪退**（2026-09-26 23:57，`Spotify-2026-09-26-235758.ips`）
 
 **材料**：`C:\dsh\readlog\Spotify-2026-09-26-235758.ips`。
